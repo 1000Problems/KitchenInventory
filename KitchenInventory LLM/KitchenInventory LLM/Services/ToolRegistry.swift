@@ -205,12 +205,19 @@ struct AddItemsTool: KitchenTool {
             let unit = itemData["unit"] as? String ?? "item"
             let expirationDays = itemData["expiration_days"] as? Int
 
+            // Use learned expiration when AI doesn't provide one
+            let effectiveDays = ExpirationLearner.bestExpirationDays(
+                for: name,
+                aiEstimate: expirationDays,
+                context: context
+            )
+
             let item = InventoryItem(
                 name: name,
                 category: category,
                 storageLocation: storage,
                 purchaseDate: .now,
-                estimatedExpiration: expirationDays.map { DateHelper.daysFromNow($0) },
+                estimatedExpiration: effectiveDays.map { DateHelper.daysFromNow($0) },
                 quantity: quantity,
                 unit: unit
             )

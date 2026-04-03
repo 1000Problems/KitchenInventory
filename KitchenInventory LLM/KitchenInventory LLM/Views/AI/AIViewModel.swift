@@ -29,11 +29,14 @@ final class AIViewModel: ObservableObject {
     @Published var partialTranscript: String = ""
     @Published var showTypingSuggestion: Bool = false
 
+    // Quick-add (learned from purchase history)
+    @Published var quickAddItems: [PurchaseHistory] = []
+
     // MARK: - Dependencies
 
     private let apiService = ClaudeAPIService()
     private let speechService = SpeechService()
-    private let model = "claude-haiku-4-5"
+    private let model = "claude-opus-4-6"
     private var currentTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
     private var consecutiveVoiceFailures: Int = 0
@@ -75,6 +78,7 @@ final class AIViewModel: ObservableObject {
         partialTranscript = ""
         hasStartedChat = true
         errorMessage = nil
+        HapticsHelper.tap()
 
         // Rotate joke
         currentJoke = KitchenJokes.jokes.randomElement() ?? ""
@@ -175,6 +179,7 @@ final class AIViewModel: ObservableObject {
 
             do {
                 isRecording = true
+                HapticsHelper.success()
                 let stream = try await speechService.startListening()
 
                 var lastTranscript = ""
@@ -219,6 +224,7 @@ final class AIViewModel: ObservableObject {
                     showTypingSuggestion = true
                 }
 
+                HapticsHelper.error()
                 if let kitchenErr = error as? KitchenError {
                     addErrorMessage(kitchenErr.errorDescription ?? "Voice error.", modelContext: modelContext)
                 }
@@ -283,6 +289,21 @@ final class AIViewModel: ObservableObject {
             messages = []
             hasStartedChat = false
         }
+
+        // Load quick-add items from purchase history
+        refreshQuickAdd(modelContext: modelContext)
+    }
+
+    // MARK: - Quick-Add
+
+    func refreshQuickAdd(modelContext: ModelContext) {
+        quickAddItems = ExpirationLearner.quickAddItems(limit: 8, context: modelContext)
+    }
+
+    /// Sends a quick-add message for a frequently purchased item
+    func quickAdd(_ item: PurchaseHistory, modelContext: ModelContext) {
+        let prompt = "Add \(item.canonicalName) to my \(item.preferredStorage.displayName.lowercased())"
+        sendMessage(prompt, modelContext: modelContext)
     }
 
     // MARK: - Clear Chat

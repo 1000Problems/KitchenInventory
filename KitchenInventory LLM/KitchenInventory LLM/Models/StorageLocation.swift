@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum StorageLocation: String, Codable, CaseIterable, Identifiable {
+enum StorageLocation: String, Codable, CaseIterable, Identifiable, Hashable {
     case pantry
     case fridge
     case freezer

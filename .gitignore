@@ -19,3 +19,4 @@ DerivedData/
 # Local convenience scripts
 push.sh
 push.command
+.gstack/

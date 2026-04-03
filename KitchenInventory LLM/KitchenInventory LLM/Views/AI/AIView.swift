@@ -9,6 +9,8 @@ import SwiftUI
 import SwiftData
 
 struct AIView: View {
+    @Binding var pendingPrompt: String?
+
     @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel = AIViewModel()
     @FocusState private var isInputFocused: Bool
@@ -45,22 +47,13 @@ struct AIView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button(role: .destructive) {
-                            viewModel.clearChat(modelContext: modelContext)
-                        } label: {
-                            Label("Clear Chat", systemImage: "trash")
-                        }
-
-                        NavigationLink {
-                            SettingsView()
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
-                        }
+                    Button(role: .destructive) {
+                        viewModel.clearChat(modelContext: modelContext)
                     } label: {
-                        Image(systemName: "gearshape")
+                        Image(systemName: "trash")
                             .foregroundColor(.textSecondary)
                     }
+                    .accessibilityLabel("Clear chat history")
                 }
             }
             .onAppear {
@@ -68,6 +61,12 @@ struct AIView: View {
             }
             .onDisappear {
                 viewModel.teardown()
+            }
+            .onChange(of: pendingPrompt) {
+                if let prompt = pendingPrompt, !prompt.isEmpty {
+                    pendingPrompt = nil
+                    viewModel.sendMessage(prompt, modelContext: modelContext)
+                }
             }
             .overlay(alignment: .bottom) {
                 if let undo = viewModel.undoToast {
@@ -123,10 +122,59 @@ struct AIView: View {
                 }
                 .padding(.horizontal, 20)
 
+                // Quick-add chips from purchase history
+                if !viewModel.quickAddItems.isEmpty {
+                    quickAddSection
+                }
+
                 Spacer()
             }
         }
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    // MARK: - Quick-Add Section
+
+    private var quickAddSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Quick Add")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.textSecondary)
+                .padding(.horizontal, 20)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.quickAddItems, id: \.canonicalName) { item in
+                        Button {
+                            viewModel.quickAdd(item, modelContext: modelContext)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.success)
+                                Text(item.canonicalName.capitalized)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.textPrimary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Color.surface1)
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.border, lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Quick add \(item.canonicalName)")
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+        .padding(.top, 4)
     }
 
     // MARK: - Chat View
@@ -598,99 +646,8 @@ struct TypingDotsView: View {
     }
 }
 
-// MARK: - Settings View (minimal — API key entry)
-
-struct SettingsView: View {
-    @State private var apiKey: String = ""
-    @State private var hasKey: Bool = KeychainHelper.hasAPIKey
-    @State private var showSavedConfirmation: Bool = false
-
-    var body: some View {
-        ZStack {
-            Color.appBg
-                .ignoresSafeArea()
-
-            List {
-                Section {
-                    if hasKey {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.success)
-                            Text("API key saved")
-                                .foregroundColor(.textPrimary)
-                            Spacer()
-                            Button("Remove") {
-                                KeychainHelper.delete(.claudeAPIKey)
-                                hasKey = false
-                                apiKey = ""
-                            }
-                            .foregroundColor(.error)
-                            .font(.subheadline)
-                        }
-                    } else {
-                        SecureField("Enter Claude API key", text: $apiKey)
-                            .textContentType(.password)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-
-                        Button("Save API Key") {
-                            guard !apiKey.isEmpty else { return }
-                            let saved = KeychainHelper.save(apiKey, for: .claudeAPIKey)
-                            if saved {
-                                hasKey = true
-                                showSavedConfirmation = true
-                                apiKey = ""
-                            }
-                        }
-                        .disabled(apiKey.isEmpty)
-                    }
-                } header: {
-                    Text("Claude API Key")
-                } footer: {
-                    Text("Your API key is stored securely in the device Keychain and never sent anywhere except Anthropic's API. This key is for development only — the shipping app uses an on-device model.")
-                }
-
-                Section {
-                    HStack {
-                        Text("Model")
-                            .foregroundColor(.textPrimary)
-                        Spacer()
-                        Text("claude-haiku-4-5")
-                            .foregroundColor(.textSecondary)
-                            .font(.caption)
-                    }
-                } header: {
-                    Text("AI Model")
-                }
-
-                Section {
-                    HStack {
-                        Text("All data stored on-device")
-                            .foregroundColor(.textPrimary)
-                        Spacer()
-                        Image(systemName: "lock.shield.fill")
-                            .foregroundColor(.success)
-                    }
-                } header: {
-                    Text("Privacy")
-                } footer: {
-                    Text("Your inventory data never leaves your device. The only network call is to the Claude API for AI responses.")
-                }
-            }
-            .scrollContentBackground(.hidden)
-        }
-        .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.inline)
-        .alert("API Key Saved", isPresented: $showSavedConfirmation) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Your Claude API key has been securely saved.")
-        }
-    }
-}
-
 #Preview {
-    AIView()
+    AIView(pendingPrompt: .constant(nil))
         .modelContainer(for: [
             InventoryItem.self,
             PurchaseHistory.self,

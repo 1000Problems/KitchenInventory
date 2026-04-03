@@ -30,28 +30,42 @@ extension Color {
         )
     }
 
-    // App color palette
-    static let appBg = Color(hex: "f5f5f7")
-    static let surface1 = Color(hex: "ffffff")
-    static let surface2 = Color(hex: "f0f0f3")
-    static let surface3 = Color(hex: "e5e5ea")
-    static let border = Color(hex: "d1d1d6")
-    static let textPrimary = Color(hex: "1c1c1e")
-    static let textSecondary = Color(hex: "636366")
-    static let textMuted = Color(hex: "8e8e93")
-    static let accent = Color(hex: "4a6cf7")
-    static let success = Color(hex: "34c759")
-    static let warning = Color(hex: "ff9500")
-    static let error = Color(hex: "ff3b30")
-    static let appPurple = Color(hex: "af52de")
-    static let gold = Color(hex: "ffcc00")
+    /// Creates an adaptive color that switches between light and dark values.
+    init(light: String, dark: String) {
+        self.init(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(Color(hex: dark)) : UIColor(Color(hex: light))
+        })
+    }
 
-    // Storage location colors
+    // MARK: - App Color Palette (adaptive light/dark)
+    // See DESIGN.md for rationale. Warm palette evokes kitchen, food, home.
+
+    static let appBg = Color(light: "FAF8F5", dark: "0A0A0A")
+    static let surface1 = Color(light: "FFFFFF", dark: "1C1C1E")
+    static let surface2 = Color(light: "F5F0EB", dark: "2C2824")
+    static let surface3 = Color(light: "EBE5DE", dark: "3A3530")
+    static let border = Color(light: "DDD5CC", dark: "3A3530")
+    static let textPrimary = Color(light: "2C2C2E", dark: "FFFFFF")
+    static let textSecondary = Color(light: "636366", dark: "ABABAF")
+    static let textMuted = Color(light: "8E8E93", dark: "636366")
+    static let accent = Color(light: "E8722A", dark: "F08040")
+    static let success = Color(light: "34C759", dark: "30D158")
+    static let warning = Color(light: "E8A030", dark: "F0A830")
+    static let error = Color(light: "FF3B30", dark: "FF453A")
+    static let appPurple = Color(light: "7B8EC2", dark: "8B9ED2")
+    static let gold = Color(light: "FFCC00", dark: "FFD60A")
+
+    // MARK: - Storage Location Colors (dedicated, no longer aliased to semantic colors)
+
+    static let pantryColor = Color(light: "D4A853", dark: "E0B860")
+    static let fridgeColor = Color(light: "4A9B8E", dark: "5AABA0")
+    static let freezerColor = Color(light: "7B8EC2", dark: "8B9ED2")
+
     static func storageColor(_ location: String) -> Color {
         switch location.lowercased() {
-        case "pantry": return .warning
-        case "fridge": return .accent
-        case "freezer": return .appPurple
+        case "pantry": return .pantryColor
+        case "fridge": return .fridgeColor
+        case "freezer": return .freezerColor
         default: return .textSecondary
         }
     }

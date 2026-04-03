@@ -8,7 +8,7 @@
 import Foundation
 import SwiftData
 
-actor ClaudeAPIService: LLMService {
+final class ClaudeAPIService: LLMService {
     private let baseURL = "https://api.anthropic.com/v1/messages"
     private let apiVersion = "2023-06-01"
     private let maxToolIterations = 5
