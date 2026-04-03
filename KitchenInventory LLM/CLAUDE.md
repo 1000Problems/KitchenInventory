@@ -2,7 +2,46 @@
 
 ## Project
 
-KitchenInventory LLM - iOS kitchen inventory app with AI-powered receipt scanning and agentic assistant.
+KitchenInventory LLM — iOS kitchen inventory app. AI assistant IS the product. Voice-first input, agentic tool-calling, SwiftData local persistence.
+
+## Architecture
+
+- **Swift 6** strict concurrency: `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
+- **SwiftData** for persistence: InventoryItem, PurchaseHistory, ChatMessage, UserSettings
+- **Claude API**: Haiku for voice parsing (~1-2s), Sonnet for chat tool loop
+- **SpeechService**: actor with SFSpeechRecognizer + AVAudioEngine, chains sessions at ~1 min limit
+- **Xcode PBXFileSystemSynchronizedRootGroup**: auto-discovers new files, no pbxproj edits needed
+
+## Key Files
+
+- `Views/MicTabView.swift` — Record tab, auto-starts recording on appear, inline recording UI
+- `Views/AI/AIView.swift` — Chat tab with agentic tool-calling loop, mic for speech-to-chat
+- `Views/AI/AIViewModel.swift` — Shared ViewModel owned by MainTabView, voice + chat state
+- `Views/AI/VoiceConfirmationView.swift` — Review parsed items before adding to inventory
+- `Views/Kitchen/KitchenView.swift` — Dashboard: Just Added, Expiring Soon, Storage cards, Recently Added
+- `Views/Kitchen/StorageDetailView.swift` — Drill-down by storage location with expand/collapse all
+- `Views/Kitchen/UniversalItemRow.swift` — Single expandable item component used everywhere
+- `Services/VoiceItemParser.swift` — Sends transcript to Claude with today's date, returns absolute dates
+- `Services/AppColors.swift` — Full color palette (baby blue accent #A7D3F0)
+- `Services/ToolRegistry.swift` — Agentic tools: getInventory, removeItems, moveItems, addItems, etc.
+- `Models/ParsedItem.swift` — Voice-parsed item with absolute expirationDate and purchaseDate
+
+## Design System
+Always read DESIGN.md before making any visual or UI decisions.
+All font choices, colors, spacing, and aesthetic direction are defined there.
+Do not deviate without explicit user approval.
+In QA mode, flag any code that doesn't match DESIGN.md.
+
+## Voice Input Formats
+Two supported formats — AI prompt includes today's date for absolute date calculation:
+1. Purchase: "I bought milk today" / "I got chicken last week"
+2. Expiration: "I have milk that expires April 7th" / "Yogurt expiring tomorrow"
+
+## Tab Structure
+0. Record (default) — auto-recording mic, voice-to-inventory pipeline
+1. AI — chat with agentic assistant, speech-to-chat mic
+2. Kitchen — dashboard with inventory overview
+3. Settings — API key, reset
 
 ## Skill routing
 
