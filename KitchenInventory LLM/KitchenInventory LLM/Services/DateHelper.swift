@@ -68,7 +68,11 @@ struct DateHelper {
 
     /// Returns a date relative to today
     static func daysFromNow(_ days: Int) -> Date {
-        Calendar.current.date(byAdding: .day, value: days, to: Calendar.current.startOfDay(for: .now))!
+        guard let date = Calendar.current.date(byAdding: .day, value: days, to: Calendar.current.startOfDay(for: .now)) else {
+            // Fallback: should never happen with standard calendar, but avoids force unwrap
+            return Calendar.current.startOfDay(for: .now)
+        }
+        return date
     }
 
     /// Relative description like "Today", "Tomorrow", "In 3 days", "2 days ago"

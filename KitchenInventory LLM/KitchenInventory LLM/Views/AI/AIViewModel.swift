@@ -28,6 +28,7 @@ final class AIViewModel: ObservableObject {
 
     private let apiService = ClaudeAPIService()
     private let model = "claude-haiku-4-5"
+    private var currentTask: Task<Void, Never>?
 
     // MARK: - Action Chips
 
@@ -59,6 +60,9 @@ final class AIViewModel: ObservableObject {
         let messageText = text ?? inputText
         guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        // Cancel any in-flight request
+        currentTask?.cancel()
+
         inputText = ""
         hasStartedChat = true
         errorMessage = nil
@@ -70,13 +74,15 @@ final class AIViewModel: ObservableObject {
         let userMessage = ChatMessage(role: "user", content: messageText)
         modelContext.insert(userMessage)
         messages.append(userMessage)
-        try? modelContext.save()
+        saveContext(modelContext, label: "user message")
 
         // Send to API
         isLoading = true
 
-        Task {
+        currentTask = Task {
             do {
+                try Task.checkCancellation()
+
                 guard KeychainHelper.hasAPIKey else {
                     throw KitchenError.noAPIKey
                 }
@@ -104,34 +110,43 @@ final class AIViewModel: ObservableObject {
                     }
                 )
 
+                try Task.checkCancellation()
+
                 // Add assistant response
                 let assistantMessage = ChatMessage(role: "assistant", content: result.text)
                 modelContext.insert(assistantMessage)
                 messages.append(assistantMessage)
-                try? modelContext.save()
+                saveContext(modelContext, label: "assistant response")
 
+            } catch is CancellationError {
+                // Task was cancelled by a new message — silently stop
             } catch let error as KitchenError {
                 errorMessage = error.errorDescription
-                let errorMsg = ChatMessage(
-                    role: "assistant",
-                    content: "⚠️ \(error.errorDescription ?? "Something went wrong.")"
-                )
-                modelContext.insert(errorMsg)
-                messages.append(errorMsg)
-                try? modelContext.save()
-
+                addErrorMessage(error.errorDescription ?? "Something went wrong.", modelContext: modelContext)
             } catch {
                 errorMessage = error.localizedDescription
-                let errorMsg = ChatMessage(
-                    role: "assistant",
-                    content: "⚠️ \(error.localizedDescription)"
-                )
-                modelContext.insert(errorMsg)
-                messages.append(errorMsg)
-                try? modelContext.save()
+                addErrorMessage(error.localizedDescription, modelContext: modelContext)
             }
 
             isLoading = false
+        }
+    }
+
+    // MARK: - Private Helpers
+
+    private func addErrorMessage(_ text: String, modelContext: ModelContext) {
+        let errorMsg = ChatMessage(role: "assistant", content: "⚠️ \(text)")
+        modelContext.insert(errorMsg)
+        messages.append(errorMsg)
+        saveContext(modelContext, label: "error message")
+    }
+
+    private func saveContext(_ context: ModelContext, label: String) {
+        do {
+            try context.save()
+        } catch {
+            print("[KitchenInventory] Failed to save \(label): \(error.localizedDescription)")
+            errorMessage = "Failed to save data. Please try again."
         }
     }
 
@@ -142,24 +157,35 @@ final class AIViewModel: ObservableObject {
             sortBy: [SortDescriptor(\.timestamp, order: .forward)]
         )
 
-        if let stored = try? modelContext.fetch(descriptor) {
+        do {
+            let stored = try modelContext.fetch(descriptor)
             messages = stored
             hasStartedChat = !stored.isEmpty
+        } catch {
+            print("[KitchenInventory] Failed to load chat history: \(error.localizedDescription)")
+            messages = []
+            hasStartedChat = false
         }
     }
 
     // MARK: - Clear Chat
 
     func clearChat(modelContext: ModelContext) {
+        currentTask?.cancel()
+        isLoading = false
+
         let descriptor = FetchDescriptor<ChatMessage>()
-        if let allMessages = try? modelContext.fetch(descriptor) {
+        do {
+            let allMessages = try modelContext.fetch(descriptor)
             for msg in allMessages {
                 modelContext.delete(msg)
             }
+        } catch {
+            print("[KitchenInventory] Failed to fetch messages for clear: \(error.localizedDescription)")
         }
         messages = []
         hasStartedChat = false
-        try? modelContext.save()
+        saveContext(modelContext, label: "clear chat")
     }
 
     // MARK: - Dismiss Undo Toast

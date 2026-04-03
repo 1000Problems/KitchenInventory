@@ -86,6 +86,19 @@ private func fetchActiveItems(context: ModelContext) throws -> [InventoryItem] {
     return try context.fetch(descriptor)
 }
 
+/// Find an item by name: exact case-insensitive match first, then substring fallback.
+/// Prevents "orange" matching "orange juice" when both exist.
+private func findItem(named name: String, in items: [InventoryItem]) -> InventoryItem? {
+    // Exact match (case-insensitive)
+    if let exact = items.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+        return exact
+    }
+    // Substring fallback — pick shortest match to prefer more specific items
+    return items
+        .filter { $0.name.localizedCaseInsensitiveContains(name) }
+        .min(by: { $0.name.count < $1.name.count })
+}
+
 private func itemToJSON(_ item: InventoryItem) -> [String: Any] {
     var dict: [String: Any] = [
         "name": item.name,
@@ -187,7 +200,8 @@ struct AddItemsTool: KitchenTool {
             let storageRaw = (itemData["storage"] as? String)?.lowercased() ?? "fridge"
             let storage = StorageLocation(rawValue: storageRaw) ?? .fridge
             let category = itemData["category"] as? String ?? "Other"
-            let quantity = itemData["quantity"] as? Double ?? 1
+            let rawQuantity = itemData["quantity"] as? Double ?? 1
+            let quantity = max(0.01, rawQuantity) // Ensure positive quantity
             let unit = itemData["unit"] as? String ?? "item"
             let expirationDays = itemData["expiration_days"] as? Int
 
@@ -235,9 +249,9 @@ struct AddItemsTool: KitchenTool {
             existing.purchaseCount += 1
             existing.lastPurchaseDate = .now
             existing.preferredStorage = storage
-            if let days = expirationDays {
-                let total = existing.averageExpirationDays * Double(existing.purchaseCount - 1) + Double(days)
-                existing.averageExpirationDays = total / Double(existing.purchaseCount)
+            if let days = expirationDays, existing.purchaseCount > 0 {
+                let previousTotal = existing.averageExpirationDays * Double(existing.purchaseCount - 1)
+                existing.averageExpirationDays = (previousTotal + Double(days)) / Double(existing.purchaseCount)
             }
         } else {
             let history = PurchaseHistory(
@@ -282,7 +296,7 @@ struct RemoveItemsTool: KitchenTool {
 
         if let names = params["names"] as? [String] {
             for name in names {
-                if let item = items.first(where: { $0.name.localizedCaseInsensitiveContains(name) && !$0.isConsumed }) {
+                if let item = findItem(named: name, in: items.filter { !$0.isConsumed }) {
                     item.isConsumed = true
                     removed.append(item.name)
                 }
@@ -327,7 +341,7 @@ struct MoveItemsTool: KitchenTool {
         var moved: [String] = []
 
         for name in names {
-            if let item = items.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) {
+            if let item = findItem(named: name, in: items) {
                 item.storageLocation = destination
                 moved.append("\(item.name) → \(destination.displayName)")
             }
@@ -365,7 +379,7 @@ struct UpdateExpirationTool: KitchenTool {
 
         let items = try fetchActiveItems(context: context)
 
-        guard let item = items.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) else {
+        guard let item = findItem(named: name, in: items) else {
             return "Item '\(name)' not found in inventory."
         }
 
@@ -395,18 +409,19 @@ struct ConsumeItemsTool: KitchenTool {
         }
 
         let items = try fetchActiveItems(context: context)
-        guard let item = items.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) else {
+        guard let item = findItem(named: name, in: items) else {
             return "Item '\(name)' not found in inventory."
         }
 
-        let consumeQty = params["quantity"] as? Double ?? item.quantity
+        let rawConsumeQty = params["quantity"] as? Double ?? item.quantity
+        let consumeQty = max(0.01, rawConsumeQty) // Ensure positive
 
         if consumeQty >= item.quantity {
             item.isConsumed = true
             try context.save()
             return "Fully consumed \(item.name)."
         } else {
-            item.quantity -= consumeQty
+            item.quantity = max(0, item.quantity - consumeQty) // Prevent negative
             try context.save()
             return "Used \(consumeQty) \(item.unit) of \(item.name). \(item.quantity) \(item.unit) remaining."
         }

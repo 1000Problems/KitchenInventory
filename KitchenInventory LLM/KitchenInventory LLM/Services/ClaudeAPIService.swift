@@ -83,8 +83,16 @@ actor ClaudeAPIService: LLMService {
         var messages = initialMessages
         var allToolResults: [ToolResult] = []
         var finalText = ""
+        let loopDeadline = Date().addingTimeInterval(90) // 90s aggregate timeout
 
         for _ in 0..<maxToolIterations {
+            // Check aggregate timeout
+            guard Date() < loopDeadline else {
+                if finalText.isEmpty {
+                    finalText = "I took too long processing that request. Please try again with a simpler question."
+                }
+                break
+            }
             let response = try await sendMessage(
                 messages: messages,
                 systemPrompt: systemPrompt,
