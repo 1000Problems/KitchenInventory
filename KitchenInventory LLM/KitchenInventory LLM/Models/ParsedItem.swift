@@ -16,9 +16,12 @@ struct ParsedItem: Identifiable, Equatable {
     var storage: StorageLocation
     var quantity: Double
     var unit: String
-    var expirationDays: Int?
 
-    /// Purchase date — defaults to today
+    /// Absolute expiration date — computed by the AI from today's date + context.
+    /// nil means no expiration (long-shelf pantry items, etc.)
+    var expirationDate: Date?
+
+    /// Purchase date — defaults to today, AI may adjust for "bought last week" etc.
     var purchaseDate: Date = .now
 
     static func == (lhs: ParsedItem, rhs: ParsedItem) -> Bool {

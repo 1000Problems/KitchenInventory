@@ -16,7 +16,7 @@ struct SettingsView: View {
     @State private var showSavedConfirmation: Bool = false
     @State private var showResetAllConfirmation: Bool = false
     @State private var connectionStatus: ConnectionStatus = .unknown
-    @State private var showResetComplete: Bool = false
+    // showResetComplete removed — reset now navigates to onboarding directly
 
     enum ConnectionStatus {
         case unknown, checking, connected, failed(String)
@@ -56,19 +56,15 @@ struct SettingsView: View {
             } message: {
                 Text("Your Claude API key has been securely saved.")
             }
-            .alert("Reset Everything?", isPresented: $showResetAllConfirmation) {
-                Button("Cancel", role: .cancel) { }
+            .confirmationDialog("Reset Everything?", isPresented: $showResetAllConfirmation, titleVisibility: .visible) {
                 Button("Reset All", role: .destructive) {
                     resetAll()
                 }
+                Button("Cancel", role: .cancel) { }
             } message: {
                 Text("This will erase all inventory, chat history, and settings. Your API key will be kept. This cannot be undone.")
             }
-            .alert("Reset Complete", isPresented: $showResetComplete) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text("The app has been reset. Restart the app to begin fresh.")
-            }
+            // No "Reset Complete" alert — goes straight back to onboarding
         }
     }
 
@@ -355,7 +351,8 @@ struct SettingsView: View {
         }
         try? modelContext.save()
 
-        showResetComplete = true
+        // Jump straight back to onboarding
+        NotificationCenter.default.post(name: .resetToOnboarding, object: nil)
     }
 }
 

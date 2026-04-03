@@ -23,6 +23,12 @@ struct KitchenPromptBuilder {
         Be brief and specific. Don't say "I'd be happy to help!" Just answer directly. \
         Example: "4 items expiring by Friday. Want a recipe using the chicken and broccoli?"
 
+        EXPIRING ITEMS FORMAT — when listing what's expiring, format each item on its own line like: \
+        "🔴 Chicken (Fridge) — EXPIRED 2 days ago" or "🟡 Milk (Fridge) — 3 days left" or \
+        "🟢 Rice (Pantry) — 12 days left". Group them: expired first, then urgent (0-3 days), \
+        then soon (4-7 days). Use emoji dots for urgency: 🔴 expired, 🟡 1-3 days, 🟢 4+ days. \
+        Keep it scannable — no paragraphs, just the list.
+
         Today's date: \(currentDate)
 
         \(inventorySummary)

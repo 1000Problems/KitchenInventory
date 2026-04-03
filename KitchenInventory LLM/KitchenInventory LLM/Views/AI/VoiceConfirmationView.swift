@@ -36,12 +36,6 @@ struct VoiceConfirmationView: View {
                                 onStorageChange: { storage in
                                     viewModel.updateParsedItemStorage(item, to: storage)
                                 },
-                                onQuantityChange: { qty in
-                                    viewModel.updateParsedItemQuantity(item, to: qty)
-                                },
-                                onDateChange: { date in
-                                    viewModel.updateParsedItemDate(item, to: date)
-                                },
                                 onRemove: {
                                     withAnimation(.easeInOut(duration: 0.25)) {
                                         viewModel.removeParsedItem(item)
@@ -167,7 +161,7 @@ struct VoiceConfirmationView: View {
                 Text("Add All \(viewModel.parsedItems.count) Items")
                     .font(.headline)
             }
-            .foregroundColor(.white)
+            .foregroundColor(.accentContrast)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
             .background(Color.accent)
@@ -195,11 +189,33 @@ struct VoiceConfirmationView: View {
 struct ParsedItemCard: View {
     let item: ParsedItem
     let onStorageChange: (StorageLocation) -> Void
-    let onQuantityChange: (Double) -> Void
-    let onDateChange: (Date) -> Void
     let onRemove: () -> Void
 
-    @State private var showDatePicker = false
+    private var expirationLabel: String? {
+        guard let date = item.expirationDate else { return nil }
+        let days = Calendar.current.dateComponents([.day], from: .now, to: date).day ?? 0
+        if days < 0 { return "Expired \(abs(days))d ago" }
+        if days == 0 { return "Expires today" }
+        if days == 1 { return "Expires tomorrow" }
+        return "Expires in \(days)d — \(DateHelper.shortDate(date))"
+    }
+
+    private var expirationColor: Color {
+        guard let date = item.expirationDate else { return .textMuted }
+        let days = Calendar.current.dateComponents([.day], from: .now, to: date).day ?? 0
+        if days < 0 { return .error }
+        if days <= 3 { return .error }
+        if days <= 7 { return .warning }
+        return .success
+    }
+
+    private var purchaseLabel: String {
+        if Calendar.current.isDateInToday(item.purchaseDate) { return "Bought today" }
+        if Calendar.current.isDateInYesterday(item.purchaseDate) { return "Bought yesterday" }
+        let days = Calendar.current.dateComponents([.day], from: item.purchaseDate, to: .now).day ?? 0
+        if days < 7 { return "Bought \(days)d ago" }
+        return "Bought \(DateHelper.shortDate(item.purchaseDate))"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -218,9 +234,6 @@ struct ParsedItemCard: View {
 
                 Spacer()
 
-                // Quantity stepper
-                quantityStepper
-
                 // Remove button
                 Button {
                     onRemove()
@@ -232,11 +245,40 @@ struct ParsedItemCard: View {
                 .accessibilityLabel("Remove \(item.name)")
             }
 
+            // Date info row — purchase + expiration
+            HStack(spacing: 12) {
+                // Purchase date
+                HStack(spacing: 4) {
+                    Image(systemName: "cart.fill")
+                        .font(.system(size: 10))
+                    Text(purchaseLabel)
+                        .font(.caption)
+                }
+                .foregroundColor(.textSecondary)
+
+                // Expiration date
+                if let expLabel = expirationLabel {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 10))
+                        Text(expLabel)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundColor(expirationColor)
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 10))
+                        Text("Long shelf life")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.textMuted)
+                }
+            }
+
             // Storage pills
             storagePills
-
-            // Purchase date buttons
-            purchaseDateButtons
         }
         .padding(16)
         .background(Color.surface1)
@@ -292,86 +334,4 @@ struct ParsedItemCard: View {
         }
     }
 
-    // MARK: - Quantity Stepper
-
-    private var quantityStepper: some View {
-        HStack(spacing: 4) {
-            Button {
-                let newQty = max(1, item.quantity - 1)
-                onQuantityChange(newQty)
-            } label: {
-                Image(systemName: "minus")
-                    .font(.caption.bold())
-                    .foregroundColor(.textSecondary)
-                    .frame(width: 28, height: 28)
-                    .background(Color.surface2)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-
-            Text("\(Int(item.quantity))")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundColor(.textPrimary)
-                .frame(minWidth: 24)
-
-            Button {
-                onQuantityChange(item.quantity + 1)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.caption.bold())
-                    .foregroundColor(.textSecondary)
-                    .frame(width: 28, height: 28)
-                    .background(Color.surface2)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Quantity \(Int(item.quantity))")
-    }
-
-    // MARK: - Purchase Date Buttons
-
-    private var purchaseDateButtons: some View {
-        HStack(spacing: 8) {
-            Text("Bought:")
-                .font(.caption)
-                .foregroundColor(.textMuted)
-
-            // Today
-            datePill("Today", date: Date.now, isSelected: Calendar.current.isDateInToday(item.purchaseDate))
-
-            // Yesterday
-            let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: .now) ?? .now
-            datePill("Yesterday", date: yesterday, isSelected: Calendar.current.isDateInYesterday(item.purchaseDate))
-
-            // This week (3 days ago as a rough "earlier this week")
-            let earlier = Calendar.current.date(byAdding: .day, value: -3, to: .now) ?? .now
-            let isEarlier = !Calendar.current.isDateInToday(item.purchaseDate)
-                && !Calendar.current.isDateInYesterday(item.purchaseDate)
-                && item.purchaseDate < Date.now
-            datePill("Earlier", date: earlier, isSelected: isEarlier)
-        }
-    }
-
-    private func datePill(_ label: String, date: Date, isSelected: Bool) -> some View {
-        Button {
-            onDateChange(date)
-        } label: {
-            Text(label)
-                .font(.caption)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(isSelected ? Color.accent.opacity(0.12) : Color.surface2)
-                .foregroundColor(isSelected ? .accent : .textSecondary)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(isSelected ? Color.accent.opacity(0.3) : Color.clear, lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-    }
 }

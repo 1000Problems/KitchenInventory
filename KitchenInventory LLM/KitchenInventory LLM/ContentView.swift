@@ -29,6 +29,11 @@ struct ContentView: View {
         .onAppear {
             checkOnboardingStatus()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .resetToOnboarding)) { _ in
+            withAnimation(.easeInOut(duration: 0.4)) {
+                showOnboarding = true
+            }
+        }
     }
 
     private func checkOnboardingStatus() {

@@ -129,7 +129,7 @@ struct VoiceModeView: View {
             // Mic icon
             Image(systemName: "mic.fill")
                 .font(.system(size: 40, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(.accentContrast)
         }
         .frame(width: 180, height: 180)
     }
@@ -158,7 +158,7 @@ struct VoiceModeView: View {
         ScrollView {
             ScrollViewReader { proxy in
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(viewModel.voiceTranscript.isEmpty ? "Say what items you have..." : viewModel.voiceTranscript)
+                    Text(viewModel.voiceTranscript.isEmpty ? "\"I bought milk today\" or \"Chicken expires April 7th\"" : viewModel.voiceTranscript)
                         .font(.body)
                         .foregroundColor(viewModel.voiceTranscript.isEmpty ? .textMuted : .textPrimary)
                         .multilineTextAlignment(.leading)
@@ -187,28 +187,27 @@ struct VoiceModeView: View {
 
     private var bottomControls: some View {
         VStack(spacing: 12) {
-            // Done button — prominent
+            // Done button — always enabled; empty transcript just dismisses
             Button {
-                viewModel.finishVoiceMode(modelContext: modelContext)
+                if viewModel.voiceTranscript.isEmpty {
+                    viewModel.cancelVoiceMode()
+                } else {
+                    viewModel.finishVoiceMode(modelContext: modelContext)
+                }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: viewModel.voiceTranscript.isEmpty ? "xmark.circle.fill" : "checkmark.circle.fill")
                         .font(.system(size: 22))
-                    Text("Done")
+                    Text(viewModel.voiceTranscript.isEmpty ? "Cancel" : "Done")
                         .font(.headline)
                 }
-                .foregroundColor(.white)
+                .foregroundColor(.accentContrast)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(
-                    viewModel.voiceTranscript.isEmpty
-                        ? Color.textMuted
-                        : Color.accent
-                )
+                .background(Color.accent)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
-            .disabled(viewModel.voiceTranscript.isEmpty)
-            .accessibilityLabel("Done recording")
+            .accessibilityLabel(viewModel.voiceTranscript.isEmpty ? "Cancel recording" : "Done recording")
 
             // Hint
             Text("Tap Done when you've listed all your items")

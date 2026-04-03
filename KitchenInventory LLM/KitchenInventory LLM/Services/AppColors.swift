@@ -48,7 +48,9 @@ extension Color {
     static let textPrimary = Color(light: "2C2C2E", dark: "FFFFFF")
     static let textSecondary = Color(light: "636366", dark: "ABABAF")
     static let textMuted = Color(light: "8E8E93", dark: "636366")
-    static let accent = Color(light: "E8722A", dark: "F08040")
+    static let accent = Color(light: "A7D3F0", dark: "7BBDE0")
+    /// Text/icon color for use ON accent backgrounds — ensures contrast.
+    static let accentContrast = Color(light: "1A3A50", dark: "0D2840")
     static let success = Color(light: "34C759", dark: "30D158")
     static let warning = Color(light: "E8A030", dark: "F0A830")
     static let error = Color(light: "FF3B30", dark: "FF453A")

@@ -10,9 +10,9 @@ import SwiftData
 
 struct AIView: View {
     @Binding var pendingPrompt: String?
+    @ObservedObject var viewModel: AIViewModel
 
     @Environment(\.modelContext) private var modelContext
-    @StateObject private var viewModel = AIViewModel()
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -60,7 +60,11 @@ struct AIView: View {
                 viewModel.loadHistory(modelContext: modelContext)
             }
             .onDisappear {
-                viewModel.teardown()
+                // Only tear down legacy single-shot recording, not shared voice mode
+                // Voice mode cancellation is handled by MainTabView's tab-switch handler
+                if viewModel.isRecording {
+                    viewModel.stopRecording(sendMessage: false, modelContext: modelContext)
+                }
             }
             .onChange(of: pendingPrompt) {
                 if let prompt = pendingPrompt, !prompt.isEmpty {
@@ -75,55 +79,6 @@ struct AIView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            // Voice Mode full-screen overlays
-            .fullScreenCover(isPresented: voiceModeBinding) {
-                voiceModeOverlay
-            }
-            .alert("Voice Mode", isPresented: voiceErrorBinding) {
-                Button("OK", role: .cancel) {
-                    viewModel.voiceModeError = nil
-                }
-            } message: {
-                Text(viewModel.voiceModeError ?? "Something went wrong.")
-            }
-        }
-    }
-
-    // MARK: - Voice Mode Binding
-
-    /// Bridges the enum state to a Bool binding for fullScreenCover.
-    private var voiceModeBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.isInVoiceMode },
-            set: { newValue in
-                if !newValue {
-                    viewModel.cancelVoiceMode()
-                }
-            }
-        )
-    }
-
-    private var voiceErrorBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.voiceModeError != nil },
-            set: { if !$0 { viewModel.voiceModeError = nil } }
-        )
-    }
-
-    // MARK: - Voice Mode Overlay
-
-    @ViewBuilder
-    private var voiceModeOverlay: some View {
-        switch viewModel.voiceSessionState {
-        case .idle:
-            // Shown briefly during dismiss animation
-            Color.appBg.ignoresSafeArea()
-        case .voiceMode:
-            VoiceModeView(viewModel: viewModel, modelContext: modelContext)
-        case .processing:
-            VoiceProcessingView()
-        case .confirming:
-            VoiceConfirmationView(viewModel: viewModel, modelContext: modelContext)
         }
     }
 
@@ -232,13 +187,6 @@ struct AIView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    // Collapsed chips (horizontal scroll)
-                    collapsedChips
-
-                    // Dad joke (small, above messages)
-                    jokeCard
-                        .padding(.bottom, 8)
-
                     // Messages
                     LazyVStack(spacing: 12) {
                         ForEach(viewModel.messages) { message in
@@ -272,37 +220,6 @@ struct AIView: View {
                     }
                 }
             }
-        }
-    }
-
-    // MARK: - Collapsed Action Chips
-
-    private var collapsedChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(viewModel.actionChips) { chip in
-                    Button {
-                        viewModel.sendMessage(chip.prompt, modelContext: modelContext)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(chip.icon)
-                                .font(.caption)
-                            Text(chip.label)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundColor(.textSecondary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Color.surface2)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(chip.label)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
         }
     }
 
@@ -383,20 +300,27 @@ struct AIView: View {
 
     private var inputBar: some View {
         VStack(spacing: 0) {
+            // Joke card — visible while waiting for AI, refreshes each session
+            if viewModel.hasStartedChat {
+                jokeCard
+                    .padding(.top, 4)
+                    .padding(.bottom, 6)
+            }
+
             // Recording state: full-width listening indicator
             if viewModel.isRecording {
                 listeningBar
             } else {
                 // Normal state: mic hero + text field
                 HStack(spacing: 12) {
-                    // Mic button — LEFT side, hero element → enters Voice Mode
+                    // Mic button — LEFT side, single-shot dictation into chat
                     Button {
-                        viewModel.enterVoiceMode(modelContext: modelContext)
+                        viewModel.toggleRecording(modelContext: modelContext)
                     } label: {
                         MicButtonView(isRecording: false)
                     }
                     .disabled(viewModel.isLoading)
-                    .accessibilityLabel("Start voice mode")
+                    .accessibilityLabel("Talk to AI")
 
                     // Text field
                     TextField("Ask me anything...", text: $viewModel.inputText, axis: .vertical)
@@ -544,7 +468,7 @@ struct MicButtonView: View {
 
                 Image(systemName: "mic.fill")
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(.accentContrast)
             }
         }
         .frame(width: 52, height: 52)
@@ -597,7 +521,7 @@ struct ChatBubbleView: View {
 
             Text(message.content)
                 .font(.body)
-                .foregroundColor(isUser ? .white : .textPrimary)
+                .foregroundColor(isUser ? .accentContrast : .textPrimary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(isUser ? Color.accent : Color.surface1)
@@ -696,7 +620,7 @@ struct TypingDotsView: View {
 }
 
 #Preview {
-    AIView(pendingPrompt: .constant(nil))
+    AIView(pendingPrompt: .constant(nil), viewModel: AIViewModel())
         .modelContainer(for: [
             InventoryItem.self,
             PurchaseHistory.self,

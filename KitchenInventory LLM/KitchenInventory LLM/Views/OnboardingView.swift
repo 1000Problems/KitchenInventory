@@ -56,7 +56,7 @@ struct OnboardingView: View {
                     Text(currentPage == totalPages - 1 ? "Get Started" : "Continue")
                         .font(.body)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(.accentContrast)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(Color.accent)

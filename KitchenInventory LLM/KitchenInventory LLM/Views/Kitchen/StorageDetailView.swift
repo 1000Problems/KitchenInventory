@@ -18,6 +18,7 @@ struct StorageDetailView: View {
     @State private var searchText: String = ""
     @State private var collapsedCategories: Set<String> = []
     @State private var checkedItemIDs: Set<PersistentIdentifier> = []
+    @State private var expandedItemID: PersistentIdentifier?
 
     init(location: StorageLocation) {
         self.location = location
@@ -60,6 +61,14 @@ struct StorageDetailView: View {
         }.count
     }
 
+    private var allCategoryNames: Set<String> {
+        Set(groupedByCategory.map { $0.category })
+    }
+
+    private var allCollapsed: Bool {
+        !allCategoryNames.isEmpty && allCategoryNames.isSubset(of: collapsedCategories)
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -84,11 +93,32 @@ struct StorageDetailView: View {
                         Section {
                             if !collapsedCategories.contains(group.category) {
                                 ForEach(group.items) { item in
-                                    ItemDetailRow(
+                                    UniversalItemRow(
                                         item: item,
                                         isChecked: checkedItemIDs.contains(item.persistentModelID),
-                                        onToggleCheck: { toggleChecked(item) }
+                                        isExpanded: expandedItemID == item.persistentModelID,
+                                        onToggleCheck: { toggleChecked(item) },
+                                        onToggleExpand: {
+                                            withAnimation(.easeInOut(duration: 0.25)) {
+                                                expandedItemID = expandedItemID == item.persistentModelID ? nil : item.persistentModelID
+                                            }
+                                        },
+                                        onChangeStorage: { newLocation in
+                                            moveItem(item, to: newLocation)
+                                        },
+                                        onDateSelected: { newDate in
+                                            item.userExpiration = newDate
+                                            try? modelContext.save()
+                                        },
+                                        onRemove: {
+                                            HapticsHelper.warning()
+                                            withAnimation {
+                                                item.isConsumed = true
+                                                try? modelContext.save()
+                                            }
+                                        }
                                     )
+                                    .listRowInsets(EdgeInsets())
                                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                         Button(role: .destructive) {
                                             toggleChecked(item)
@@ -120,6 +150,26 @@ struct StorageDetailView: View {
         }
         .navigationTitle(location.displayName)
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if !groupedByCategory.isEmpty {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            if allCollapsed {
+                                collapsedCategories.removeAll()
+                            } else {
+                                collapsedCategories = allCategoryNames
+                            }
+                        }
+                    } label: {
+                        Image(systemName: allCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.textSecondary)
+                    }
+                    .accessibilityLabel(allCollapsed ? "Expand all categories" : "Collapse all categories")
+                }
+            }
+        }
         .onDisappear { consumeCheckedItems() }
     }
 
@@ -240,104 +290,6 @@ struct StorageDetailView: View {
             item.storageLocation = newLocation
             try? modelContext.save()
         }
-    }
-}
-
-// MARK: - Item Detail Row
-
-struct ItemDetailRow: View {
-    let item: InventoryItem
-    var isChecked: Bool = false
-    var onToggleCheck: (() -> Void)?
-
-    private var urgencyColor: Color {
-        switch item.expirationUrgency {
-        case .expired: return .error
-        case .danger: return .error
-        case .warning: return .warning
-        case .safe: return .success
-        case .none: return .textMuted
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // Checkbox
-            if let onToggleCheck {
-                Button(action: onToggleCheck) {
-                    Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundColor(isChecked ? .success : .textMuted)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isChecked ? "Uncheck \(item.name)" : "Mark \(item.name) as used")
-            } else {
-                Circle()
-                    .fill(urgencyColor)
-                    .frame(width: 8, height: 8)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .foregroundColor(isChecked ? .textMuted : .textPrimary)
-                    .strikethrough(isChecked)
-                    .lineLimit(1)
-
-                HStack(spacing: 4) {
-                    Text(quantityLabel)
-
-                    if let exp = item.effectiveExpiration {
-                        Text("·")
-                        Text(DateHelper.shortDate(exp))
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(.textMuted)
-            }
-
-            Spacer()
-
-            if !isChecked, let days = item.daysUntilExpiration {
-                Text(expirationBadge(days))
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .foregroundColor(urgencyColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(urgencyColor.opacity(0.1))
-                    .clipShape(Capsule())
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityDescription)
-        .accessibilityHint("Swipe right for move options, swipe left to mark as used, or tap checkbox")
-    }
-
-    private var accessibilityDescription: String {
-        var parts = [item.name, quantityLabel]
-        if let days = item.daysUntilExpiration {
-            if days < 0 { parts.append("\(abs(days)) days overdue") }
-            else if days == 0 { parts.append("expires today") }
-            else if days == 1 { parts.append("expires tomorrow") }
-            else { parts.append("expires in \(days) days") }
-        }
-        if isChecked { parts.append("checked off") }
-        return parts.joined(separator: ", ")
-    }
-
-    private var quantityLabel: String {
-        let qty = item.quantity
-        let qtyStr = qty.truncatingRemainder(dividingBy: 1) == 0 ? String(format: "%.0f", qty) : String(format: "%.1f", qty)
-        return "\(qtyStr) \(item.unit)"
-    }
-
-    private func expirationBadge(_ days: Int) -> String {
-        if days < 0 { return "\(abs(days))d over" }
-        if days == 0 { return "Today" }
-        if days == 1 { return "1d" }
-        return "\(days)d"
     }
 }
 

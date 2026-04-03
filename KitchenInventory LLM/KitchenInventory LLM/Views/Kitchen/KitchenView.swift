@@ -9,6 +9,9 @@ import SwiftData
 import SwiftUI
 
 struct KitchenView: View {
+    /// Navigation path — reset from outside to pop to root on tab switch.
+    @Binding var navigationPath: NavigationPath
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -22,6 +25,10 @@ struct KitchenView: View {
     @State private var expandedItemID: PersistentIdentifier?
     @State private var checkedItemIDs: Set<PersistentIdentifier> = []
     @State private var actionToast: ActionToastData?
+
+    /// Names of items just added via Voice Mode — drives the "Just Added" section.
+    /// Replaced each time a new Voice Mode batch is confirmed.
+    @State private var justAddedNames: [String] = []
 
     struct ActionToastData: Identifiable {
         let id = UUID()
@@ -67,6 +74,19 @@ struct KitchenView: View {
             .map { $0 }
     }
 
+    /// Items matching the just-added names, in the order they were spoken.
+    private var justAddedItems: [InventoryItem] {
+        guard !justAddedNames.isEmpty else { return [] }
+        let nameSet = Set(justAddedNames.map { $0.lowercased() })
+        return allItems
+            .filter { nameSet.contains($0.name.lowercased()) }
+            .sorted { a, b in
+                let idxA = justAddedNames.firstIndex(where: { $0.caseInsensitiveCompare(a.name) == .orderedSame }) ?? 999
+                let idxB = justAddedNames.firstIndex(where: { $0.caseInsensitiveCompare(b.name) == .orderedSame }) ?? 999
+                return idxA < idxB
+            }
+    }
+
     private func itemCount(for location: StorageLocation) -> Int {
         allItems.filter { $0.storageLocation == location }.count
     }
@@ -81,8 +101,8 @@ struct KitchenView: View {
     // MARK: - Body
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottomTrailing) {
+        NavigationStack(path: $navigationPath) {
+            ZStack {
                 Color.appBg
                     .ignoresSafeArea()
 
@@ -94,6 +114,9 @@ struct KitchenView: View {
                             searchBar
 
                             if searchText.isEmpty {
+                                if !justAddedItems.isEmpty {
+                                    justAddedSection
+                                }
                                 if !combinedExpiringItems.isEmpty {
                                     expiringSoonSection
                                 }
@@ -119,7 +142,6 @@ struct KitchenView: View {
                     }
                 }
 
-                addButton
             }
             .navigationTitle("Kitchen")
             .navigationBarTitleDisplayMode(.large)
@@ -128,6 +150,13 @@ struct KitchenView: View {
             }
             .onDisappear {
                 consumeCheckedItems()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .switchToKitchenWithNewItems)) { notification in
+                if let names = notification.object as? [String] {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        justAddedNames = names
+                    }
+                }
             }
             .overlay(alignment: .bottom) {
                 if let toast = actionToast {
@@ -159,7 +188,7 @@ struct KitchenView: View {
             }
 
             // Collapse if this item was expanded
-            if expandedItemID == item.id {
+            if expandedItemID == item.persistentModelID {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     expandedItemID = nil
                 }
@@ -282,7 +311,7 @@ struct KitchenView: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.textPrimary)
 
-            Text("Talk to the AI assistant to add\nyour first items via voice or text.")
+            Text("Tap the mic to add your first\nitems by voice.")
                 .font(.subheadline)
                 .foregroundColor(.textSecondary)
                 .multilineTextAlignment(.center)
@@ -354,32 +383,21 @@ struct KitchenView: View {
 
             VStack(spacing: 0) {
                 ForEach(Array(combinedExpiringItems.enumerated()), id: \.element.persistentModelID) { index, item in
-                    VStack(spacing: 0) {
-                        // Main row
-                        ExpiringItemRow(
-                            item: item,
-                            isExpanded: expandedItemID == item.id,
-                            isChecked: checkedItemIDs.contains(item.persistentModelID),
-                            onToggleCheck: { toggleChecked(item) },
-                            onToggleExpand: {
-                                withAnimation(.easeInOut(duration: 0.25)) {
-                                    expandedItemID = expandedItemID == item.id ? nil : item.id
-                                }
+                    UniversalItemRow(
+                        item: item,
+                        isChecked: checkedItemIDs.contains(item.persistentModelID),
+                        isExpanded: expandedItemID == item.persistentModelID,
+                        onToggleCheck: { toggleChecked(item) },
+                        onToggleExpand: {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                expandedItemID = expandedItemID == item.persistentModelID ? nil : item.persistentModelID
                             }
-                        )
-
-                        // Expandable panel
-                        if expandedItemID == item.id {
-                            ExpandedItemPanel(
-                                item: item,
-                                onExpired: { markExpired(item) },
-                                onDateSelected: { updateExpiration(item, to: $0) },
-                                onRecipe: { requestRecipe(for: item) },
-                                onFreeze: { freezeItem(item) }
-                            )
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                    }
+                        },
+                        onDateSelected: { updateExpiration(item, to: $0) },
+                        onRecipe: { requestRecipe(for: item) },
+                        onFreeze: { freezeItem(item) },
+                        onRemove: { markExpired(item) }
+                    )
 
                     if index < combinedExpiringItems.count - 1 {
                         Divider()
@@ -390,6 +408,84 @@ struct KitchenView: View {
             .background(Color.surface1)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .shadow(color: .black.opacity(0.04), radius: 4, y: 2)
+        }
+    }
+
+    // MARK: - Just Added Section
+
+    private var justAddedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "sparkles")
+                    .foregroundColor(.accent)
+                    .font(.system(size: 15, weight: .semibold))
+
+                Text("Just Added")
+                    .font(.headline)
+                    .foregroundColor(.textPrimary)
+
+                Text("\(justAddedItems.count)")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.accentContrast)
+                    .frame(width: 22, height: 22)
+                    .background(Color.accent)
+                    .clipShape(Circle())
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        justAddedNames = []
+                    }
+                } label: {
+                    Text("Dismiss")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.textMuted)
+                }
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(justAddedItems.enumerated()), id: \.element.persistentModelID) { index, item in
+                    UniversalItemRow(
+                        item: item,
+                        isExpanded: expandedItemID == item.persistentModelID,
+                        onToggleExpand: {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                expandedItemID = expandedItemID == item.persistentModelID ? nil : item.persistentModelID
+                            }
+                        },
+                        onChangeStorage: { newStorage in
+                            HapticsHelper.tap()
+                            item.storageLocation = newStorage
+                            try? modelContext.save()
+                        },
+                        onDateSelected: { updateExpiration(item, to: $0) },
+                        onRemove: {
+                            HapticsHelper.warning()
+                            let name = item.name
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                item.isConsumed = true
+                                justAddedNames.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
+                                try? modelContext.save()
+                            }
+                        }
+                    )
+
+                    if index < justAddedItems.count - 1 {
+                        Divider()
+                            .padding(.leading, 40)
+                    }
+                }
+            }
+            .background(Color.surface1)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.accent.opacity(0.3), lineWidth: 1)
+            )
+            .shadow(color: Color.accent.opacity(0.08), radius: 6, y: 3)
         }
     }
 
@@ -432,11 +528,21 @@ struct KitchenView: View {
 
             VStack(spacing: 0) {
                 ForEach(Array(recentlyAddedItems.enumerated()), id: \.element.persistentModelID) { index, item in
-                    RecentItemRow(
-                            item: item,
-                            isChecked: checkedItemIDs.contains(item.persistentModelID),
-                            onToggleCheck: { toggleChecked(item) }
-                        )
+                    UniversalItemRow(
+                        item: item,
+                        isChecked: checkedItemIDs.contains(item.persistentModelID),
+                        isExpanded: expandedItemID == item.persistentModelID,
+                        onToggleCheck: { toggleChecked(item) },
+                        onToggleExpand: {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                expandedItemID = expandedItemID == item.persistentModelID ? nil : item.persistentModelID
+                            }
+                        },
+                        onDateSelected: { updateExpiration(item, to: $0) },
+                        onRecipe: { requestRecipe(for: item) },
+                        onFreeze: { freezeItem(item) },
+                        onRemove: { markExpired(item) }
+                    )
 
                     if index < recentlyAddedItems.count - 1 {
                         Divider()
@@ -472,11 +578,26 @@ struct KitchenView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(filteredItems.enumerated()), id: \.element.persistentModelID) { index, item in
-                        SearchResultRow(
-                                item: item,
-                                isChecked: checkedItemIDs.contains(item.persistentModelID),
-                                onToggleCheck: { toggleChecked(item) }
-                            )
+                        UniversalItemRow(
+                            item: item,
+                            isChecked: checkedItemIDs.contains(item.persistentModelID),
+                            isExpanded: expandedItemID == item.persistentModelID,
+                            onToggleCheck: { toggleChecked(item) },
+                            onToggleExpand: {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    expandedItemID = expandedItemID == item.persistentModelID ? nil : item.persistentModelID
+                                }
+                            },
+                            onChangeStorage: { newStorage in
+                                HapticsHelper.tap()
+                                item.storageLocation = newStorage
+                                try? modelContext.save()
+                            },
+                            onDateSelected: { updateExpiration(item, to: $0) },
+                            onRecipe: { requestRecipe(for: item) },
+                            onFreeze: { freezeItem(item) },
+                            onRemove: { markExpired(item) }
+                        )
 
                         if index < filteredItems.count - 1 {
                             Divider()
@@ -491,25 +612,6 @@ struct KitchenView: View {
         }
     }
 
-    // MARK: - Add Button
-
-    private var addButton: some View {
-        Button {
-            NotificationCenter.default.post(name: .switchToAITab, object: nil)
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.accent)
-                .clipShape(Circle())
-                .shadow(color: .accent.opacity(0.35), radius: 8, y: 4)
-        }
-        .padding(.trailing, 20)
-        .padding(.bottom, 16)
-        .accessibilityLabel("Add items via AI")
-        .accessibilityHint("Opens the AI tab to add items by voice or text")
-    }
 }
 
 // MARK: - Notification Names
@@ -517,266 +619,11 @@ struct KitchenView: View {
 extension Notification.Name {
     static let switchToAITab = Notification.Name("switchToAITab")
     static let switchToAITabWithPrompt = Notification.Name("switchToAITabWithPrompt")
+    static let resetToOnboarding = Notification.Name("resetToOnboarding")
+    static let switchToKitchenWithNewItems = Notification.Name("switchToKitchenWithNewItems")
+    static let switchToRecordTab = Notification.Name("switchToRecordTab")
 }
 
-// MARK: - Expiring Item Row (with Used button + caret)
-
-struct ExpiringItemRow: View {
-    let item: InventoryItem
-    let isExpanded: Bool
-    let isChecked: Bool
-    let onToggleCheck: () -> Void
-    let onToggleExpand: () -> Void
-
-    private var urgencyColor: Color {
-        switch item.expirationUrgency {
-        case .expired: return .error
-        case .danger: return .error
-        case .warning: return .warning
-        case .safe: return .success
-        case .none: return .textMuted
-        }
-    }
-
-    private var expirationLabel: String {
-        guard let days = item.daysUntilExpiration else { return "" }
-        if days < 0 { return "\(abs(days))d overdue" }
-        if days == 0 { return "Today" }
-        if days == 1 { return "Tomorrow" }
-        return "\(days)d left"
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            // Checkbox
-            Button(action: onToggleCheck) {
-                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundColor(isChecked ? .success : .textMuted)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isChecked ? "Uncheck \(item.name)" : "Mark \(item.name) as used")
-
-            // Item info (tappable to expand)
-            Button(action: onToggleExpand) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(urgencyColor)
-                        .frame(width: 8, height: 8)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.name)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(isChecked ? .textMuted : .textPrimary)
-                            .strikethrough(isChecked)
-                            .lineLimit(1)
-
-                        Text(item.storageLocation.displayName)
-                            .font(.caption)
-                            .foregroundColor(.textMuted)
-                    }
-
-                    Spacer()
-
-                    if !isChecked {
-                        Text(expirationLabel)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(urgencyColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(urgencyColor.opacity(0.1))
-                            .clipShape(Capsule())
-
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.textMuted)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(isChecked)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.name), \(item.storageLocation.displayName), \(expirationLabel)\(isChecked ? ", checked off" : "")")
-    }
-}
-
-// MARK: - Expanded Item Panel
-
-struct ExpandedItemPanel: View {
-    let item: InventoryItem
-    let onExpired: () -> Void
-    let onDateSelected: (Date) -> Void
-    let onRecipe: () -> Void
-    let onFreeze: () -> Void
-
-    private var daysSincePurchase: Int {
-        Calendar.current.dateComponents([.day], from: item.purchaseDate, to: .now).day ?? 0
-    }
-
-    private var contextLine: String {
-        let bought = "Bought \(DateHelper.shortDate(item.purchaseDate))"
-        let duration = "In your \(item.storageLocation.displayName.lowercased()) \(daysSincePurchase) day\(daysSincePurchase == 1 ? "" : "s")"
-        return "\(bought) · \(duration)"
-    }
-
-    /// Generate date options for the strip
-    private var dateOptions: [DateOption] {
-        guard let currentExp = item.effectiveExpiration else { return [] }
-        let daysLeft = item.daysUntilExpiration ?? 0
-
-        // Context-aware intervals
-        let intervals: [Int]
-        if daysLeft <= 3 {
-            intervals = [1, 2, 3, 5]
-        } else {
-            intervals = [3, 5, 7, 14]
-        }
-
-        var options: [DateOption] = []
-
-        // Current expiration (selected)
-        options.append(DateOption(
-            date: currentExp,
-            isCurrent: true
-        ))
-
-        // Future dates
-        for days in intervals {
-            if let futureDate = Calendar.current.date(byAdding: .day, value: days, to: currentExp) {
-                options.append(DateOption(
-                    date: futureDate,
-                    isCurrent: false
-                ))
-            }
-        }
-
-        return options
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Context line
-            Text(contextLine)
-                .font(.caption)
-                .foregroundColor(.textSecondary)
-                .padding(.horizontal, 14)
-
-            // Date strip
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    // Expired button
-                    Button(action: onExpired) {
-                        VStack(spacing: 3) {
-                            Text("EXPIRED")
-                                .font(.system(size: 9, weight: .bold))
-                            Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .semibold))
-                        }
-                        .frame(width: 52, height: 52)
-                        .foregroundColor(.white)
-                        .background(Color.error)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Mark as expired")
-
-                    // Date options
-                    ForEach(dateOptions) { option in
-                        if option.isCurrent {
-                            // Current date — visually distinct, non-interactive
-                            VStack(spacing: 3) {
-                                Text(DateHelper.dayOfWeek(option.date))
-                                    .font(.system(size: 9, weight: .bold))
-                                Text("\(DateHelper.dayNumber(option.date))")
-                                    .font(.system(size: 18, weight: .bold))
-                            }
-                            .frame(width: 52, height: 52)
-                            .foregroundColor(.white)
-                            .background(Color.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .accessibilityLabel("Current expiration \(DateHelper.shortDate(option.date))")
-                        } else {
-                            // Future date — tappable
-                            Button {
-                                onDateSelected(option.date)
-                            } label: {
-                                VStack(spacing: 3) {
-                                    Text(DateHelper.dayOfWeek(option.date))
-                                        .font(.system(size: 9, weight: .bold))
-                                        .foregroundColor(.textMuted)
-                                    Text("\(DateHelper.dayNumber(option.date))")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.textPrimary)
-                                }
-                                .frame(width: 52, height: 52)
-                                .background(Color.surface2)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Extend to \(DateHelper.shortDate(option.date))")
-                        }
-                    }
-                }
-                .padding(.horizontal, 14)
-            }
-
-            // Action buttons
-            HStack(spacing: 10) {
-                Button(action: onRecipe) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "fork.knife")
-                            .font(.system(size: 12))
-                        Text("Recipe")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundColor(.accent)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.accent.opacity(0.1))
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-
-                if item.storageLocation != .freezer {
-                    Button(action: onFreeze) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "snowflake")
-                                .font(.system(size: 12))
-                            Text("Freeze it")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                        }
-                        .foregroundColor(.appPurple)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Color.appPurple.opacity(0.1))
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-        }
-        .padding(.bottom, 12)
-    }
-}
-
-// MARK: - Date Option
-
-struct DateOption: Identifiable {
-    let id = UUID()
-    let date: Date
-    let isCurrent: Bool
-}
 
 // MARK: - Storage Card
 
@@ -831,113 +678,10 @@ struct StorageCardContent: View {
     }
 }
 
-// MARK: - Recent Item Row (with Used button)
-
-struct RecentItemRow: View {
-    let item: InventoryItem
-    let isChecked: Bool
-    let onToggleCheck: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            // Checkbox
-            Button(action: onToggleCheck) {
-                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundColor(isChecked ? .success : .textMuted)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isChecked ? "Uncheck \(item.name)" : "Mark \(item.name) as used")
-
-            Image(systemName: item.storageLocation.icon)
-                .font(.system(size: 14))
-                .foregroundColor(Color.storageColor(item.storageLocationRaw))
-                .frame(width: 28, height: 28)
-                .background(Color.storageColor(item.storageLocationRaw).opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.body)
-                    .foregroundColor(isChecked ? .textMuted : .textPrimary)
-                    .strikethrough(isChecked)
-                    .lineLimit(1)
-
-                Text(item.storageLocation.displayName)
-                    .font(.caption)
-                    .foregroundColor(.textMuted)
-            }
-
-            Spacer()
-
-            Text(DateHelper.relativeDescription(item.purchaseDate))
-                .font(.caption)
-                .foregroundColor(.textSecondary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-}
-
-// MARK: - Search Result Row (with Used button)
-
-struct SearchResultRow: View {
-    let item: InventoryItem
-    let isChecked: Bool
-    let onToggleCheck: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            // Checkbox
-            Button(action: onToggleCheck) {
-                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundColor(isChecked ? .success : .textMuted)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isChecked ? "Uncheck \(item.name)" : "Mark \(item.name) as used")
-
-            Image(systemName: item.storageLocation.icon)
-                .font(.system(size: 14))
-                .foregroundColor(Color.storageColor(item.storageLocationRaw))
-                .frame(width: 28, height: 28)
-                .background(Color.storageColor(item.storageLocationRaw).opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.body)
-                    .foregroundColor(isChecked ? .textMuted : .textPrimary)
-                    .strikethrough(isChecked)
-                    .lineLimit(1)
-
-                HStack(spacing: 4) {
-                    Text(item.storageLocation.displayName)
-                    if let exp = item.effectiveExpiration {
-                        Text("·")
-                        Text(DateHelper.shortDate(exp))
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(.textMuted)
-            }
-
-            Spacer()
-
-            if item.expirationUrgency == .danger || item.expirationUrgency == .expired {
-                Circle()
-                    .fill(Color.error)
-                    .frame(width: 8, height: 8)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-}
 
 // MARK: - Preview
 
 #Preview {
-    KitchenView()
+    KitchenView(navigationPath: .constant(NavigationPath()))
         .modelContainer(for: InventoryItem.self, inMemory: true)
 }

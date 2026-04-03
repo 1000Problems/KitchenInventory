@@ -69,10 +69,9 @@ final class AIViewModel: ObservableObject {
     }
 
     let actionChips: [ActionChip] = [
-        ActionChip(icon: "🔍", label: "What's expiring?", prompt: "What items in my kitchen are expiring soon? List them with their expiration dates."),
-        ActionChip(icon: "🍳", label: "Recipe ideas", prompt: "Suggest a recipe using ingredients I have that are expiring soonest."),
-        ActionChip(icon: "➕", label: "Add items", prompt: "I'd like to add some items to my inventory. What would you like to add?"),
-        ActionChip(icon: "🛒", label: "What can I cook?", prompt: "Based on everything in my kitchen right now, what meals can I make without buying anything else?"),
+        ActionChip(icon: "🍳", label: "Recipe Ideas", prompt: "Suggest 2-3 quick recipes using ingredients I have, prioritizing items that expire soonest. Keep it short — recipe name, key ingredients, cook time."),
+        ActionChip(icon: "⏰", label: "What's Expiring?", prompt: "Show me what's expiring soon. For each item show the name, where it's stored, and how many days left. Group by urgency: expired first, then expiring within 3 days, then within a week. Keep it clean and scannable."),
+        ActionChip(icon: "🗑️", label: "Remove Expired", prompt: "Find all expired items in my kitchen and remove them. Tell me what you removed."),
     ]
 
     // MARK: - Undo
@@ -452,6 +451,7 @@ final class AIViewModel: ObservableObject {
         guard !parsedItems.isEmpty else { return }
 
         let count = parsedItems.count
+        let itemNames = parsedItems.map { $0.name }
         HapticsHelper.success()
 
         for parsed in parsedItems {
@@ -460,40 +460,47 @@ final class AIViewModel: ObservableObject {
                 category: parsed.category,
                 storageLocation: parsed.storage,
                 purchaseDate: parsed.purchaseDate,
-                estimatedExpiration: parsed.expirationDays.map { DateHelper.daysFromNow($0) },
+                estimatedExpiration: parsed.expirationDate,
                 quantity: parsed.quantity,
                 unit: parsed.unit,
                 source: "voice"
             )
             modelContext.insert(item)
 
+            // Compute days for purchase history (relative from purchase date)
+            let expDays: Int? = parsed.expirationDate.map {
+                Calendar.current.dateComponents([.day], from: parsed.purchaseDate, to: $0).day ?? 7
+            }
+
             // Upsert purchase history
             upsertPurchaseHistory(
                 name: parsed.name,
                 storage: parsed.storage,
                 category: parsed.category,
-                expirationDays: parsed.expirationDays,
+                expirationDays: expDays,
                 context: modelContext
             )
         }
 
         saveContext(modelContext, label: "voice mode add items")
 
-        // Show confirmation in chat
-        let itemNames = parsedItems.map { $0.name }.joined(separator: ", ")
-        let confirmMessage = ChatMessage(role: "assistant", content: "Added \(count) item\(count == 1 ? "" : "s") from voice: \(itemNames)")
+        // Add a quiet chat record (visible when user opens AI tab)
+        let confirmMessage = ChatMessage(role: "assistant", content: "Added \(count) item\(count == 1 ? "" : "s") from voice: \(itemNames.joined(separator: ", "))")
         modelContext.insert(confirmMessage)
         messages.append(confirmMessage)
         hasStartedChat = true
         saveContext(modelContext, label: "voice confirm message")
 
-        // Reset state
+        // Reset voice state
         voiceSessionState = .idle
         voiceTranscript = ""
         parsedItems = []
 
         // Refresh quick-add
         refreshQuickAdd(modelContext: modelContext)
+
+        // Switch to Kitchen tab showing just-added items
+        NotificationCenter.default.post(name: .switchToKitchenWithNewItems, object: itemNames)
     }
 
     /// Remove a single item from the parsed list during confirmation.
@@ -514,12 +521,6 @@ final class AIViewModel: ObservableObject {
     func updateParsedItemQuantity(_ item: ParsedItem, to quantity: Double) {
         guard let index = parsedItems.firstIndex(where: { $0.id == item.id }) else { return }
         parsedItems[index].quantity = max(0.01, quantity)
-    }
-
-    /// Update a parsed item's purchase date.
-    func updateParsedItemDate(_ item: ParsedItem, to date: Date) {
-        guard let index = parsedItems.firstIndex(where: { $0.id == item.id }) else { return }
-        parsedItems[index].purchaseDate = date
     }
 
     // MARK: - Private: Purchase History Upsert

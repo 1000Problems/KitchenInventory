@@ -48,8 +48,25 @@ final class VoiceItemParser {
             learnedPrefs = "\n\nLEARNED PREFERENCES (use these when available):\n\(prefs.joined(separator: "\n"))"
         }
 
+        // Inject today's date so the model can compute absolute dates
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMMM d, yyyy"
+        let todayString = formatter.string(from: .now)
+
+        let isoFormatter = DateFormatter()
+        isoFormatter.dateFormat = "yyyy-MM-dd"
+        let todayISO = isoFormatter.string(from: .now)
+
         return """
         You are a kitchen inventory parser. Your ONLY job is to extract grocery/food items from a voice transcript and return them as a JSON array.
+
+        TODAY'S DATE: \(todayString) (\(todayISO))
+
+        The user will speak in one of two formats:
+        1. PURCHASE FORMAT: "I bought milk today" / "I got chicken last week" / "I bought eggs yesterday"
+           → Set purchase_date to when they bought it. Calculate expiration_date from that purchase date + typical shelf life.
+        2. EXPIRATION FORMAT: "I have milk that expires April 7th" / "Yogurt expiring tomorrow" / "Chicken expires in 3 days"
+           → Set purchase_date to today. Set expiration_date to the date they stated.
 
         RULES:
         1. Return ONLY a JSON array. No explanation, no markdown, no code fences.
@@ -59,7 +76,29 @@ final class VoiceItemParser {
            - "storage": string (one of: "pantry", "fridge", "freezer")
            - "quantity": number (default 1)
            - "unit": string (e.g. "item", "lb", "oz", "gallon", "dozen", "bag", "box", "can")
-           - "expiration_days": integer or null (estimated days until expiration from today)
+           - "purchase_date": string in "yyyy-MM-dd" format (when they bought it; default to today)
+           - "expiration_date": string in "yyyy-MM-dd" format or null (absolute expiration date)
+
+        DATE CALCULATION (CRITICAL — get this right):
+        - "today" = \(todayISO)
+        - "yesterday" = one day before today
+        - "last week" = 7 days before today
+        - "3 days ago" = 3 days before today
+        - "April 7th" = 2026-04-07 (use the current year unless context suggests otherwise)
+        - "tomorrow" = one day after today
+        - "in 3 days" = 3 days after today
+        - Always output dates as "yyyy-MM-dd" strings.
+
+        EXPIRATION ESTIMATES (from purchase date, NOT from today):
+        - Fresh produce: purchase_date + 5-7 days
+        - Dairy (milk, yogurt): purchase_date + 7-14 days
+        - Fresh meat/poultry: purchase_date + 3-5 days
+        - Fresh fish: purchase_date + 2-3 days
+        - Bread: purchase_date + 5-7 days
+        - Eggs: purchase_date + 21-28 days
+        - Canned goods: null (very long shelf life)
+        - Frozen items: null (very long shelf life)
+        - Pantry staples (rice, pasta, flour): null (very long shelf life)
 
         STORAGE RULES:
         - FRIDGE: milk, eggs, cheese, yogurt, butter, chicken, beef, pork, fish, fresh vegetables, fresh fruit, deli meat, tofu, hummus, salsa, fresh herbs, orange juice, leftovers
@@ -82,15 +121,19 @@ final class VoiceItemParser {
         - "some rice" → quantity: 1, unit: "bag"
         - If no quantity mentioned, default to 1 item.
 
-        EXPIRATION ESTIMATES:
-        - Fresh produce: 5-7 days. Dairy: 7-14 days. Fresh meat: 3-5 days.
-        - Bread: 5-7 days. Canned goods: 365 days. Frozen: 90 days. Pantry staples: 180 days.
-
         Ignore non-food items. If the transcript is unclear, do your best to extract what you can.
         """
     }
 
     // MARK: - Response Parsing
+
+    /// ISO date formatter for parsing yyyy-MM-dd strings from the API response.
+    private static let isoDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
 
     private func parseItemsFromResponse(_ text: String) -> [ParsedItem] {
         // Strip any markdown code fences Claude might add despite instructions
@@ -111,6 +154,8 @@ final class VoiceItemParser {
             return []
         }
 
+        let dateFormatter = Self.isoDateFormatter
+
         return jsonArray.compactMap { dict -> ParsedItem? in
             guard let name = dict["name"] as? String, !name.isEmpty else { return nil }
 
@@ -119,7 +164,23 @@ final class VoiceItemParser {
             let storage = StorageLocation(rawValue: storageStr) ?? .fridge
             let quantity = dict["quantity"] as? Double ?? (dict["quantity"] as? Int).map { Double($0) } ?? 1
             let unit = dict["unit"] as? String ?? "item"
-            let expirationDays = dict["expiration_days"] as? Int
+
+            // Parse absolute dates from the response
+            let purchaseDate: Date
+            if let dateStr = dict["purchase_date"] as? String,
+               let parsed = dateFormatter.date(from: dateStr) {
+                purchaseDate = parsed
+            } else {
+                purchaseDate = .now
+            }
+
+            let expirationDate: Date?
+            if let dateStr = dict["expiration_date"] as? String,
+               let parsed = dateFormatter.date(from: dateStr) {
+                expirationDate = parsed
+            } else {
+                expirationDate = nil
+            }
 
             return ParsedItem(
                 name: name,
@@ -127,7 +188,8 @@ final class VoiceItemParser {
                 storage: storage,
                 quantity: max(0.01, quantity),
                 unit: unit,
-                expirationDays: expirationDays
+                expirationDate: expirationDate,
+                purchaseDate: purchaseDate
             )
         }
     }

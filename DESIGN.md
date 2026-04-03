@@ -35,7 +35,8 @@
 | textPrimary | #2C2C2E | Main text |
 | textSecondary | #636366 | Secondary labels |
 | textMuted | #8E8E93 | Hints, placeholders, unchecked circles |
-| accent | #E8722A | Primary action, selected tab, FAB |
+| accent | #A7D3F0 | Primary action, selected tab, mic orb |
+| accentContrast | #1A3A50 | Text/icons on accent backgrounds |
 | success | #34C759 | Checkmarks, positive states |
 | warning | #E8A030 | Expiring soon badges |
 | error | #FF3B30 | Expired, destructive actions |
@@ -53,7 +54,8 @@
 | textPrimary | #FFFFFF | Main text |
 | textSecondary | #ABABAF | Secondary labels |
 | textMuted | #636366 | Hints, placeholders |
-| accent | #F08040 | Primary action (brighter for dark bg) |
+| accent | #7BBDE0 | Primary action (deeper for dark bg) |
+| accentContrast | #0D2840 | Text/icons on accent backgrounds |
 | success | #30D158 | Checkmarks |
 | warning | #F0A830 | Warning badges |
 | error | #FF453A | Error states |
@@ -94,7 +96,7 @@
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-04-03 | Initial design system created | Created by /design-consultation based on competitive research in kitchen/food app space |
-| 2026-04-03 | Warm orange accent (#E8722A) over cold blue (#4A6CF7) | Research showed every competitor uses cold blue/gray. Warm orange evokes food, appetite, kitchen warmth. Differentiates from workout app while keeping structural consistency. |
+| 2026-04-03 | Baby blue accent (#A7D3F0) over warm orange (#E8722A) | Orange is overused in food apps. Baby blue is distinctive, calming, and differentiates. Dark navy contrast text (#1A3A50) ensures readability on the light accent. |
 | 2026-04-03 | Warm off-white bg (#FAF8F5) over cold gray (#F5F5F7) | Subtle shift that changes the entire feel from "tech dashboard" to "kitchen space" |
 | 2026-04-03 | Teal-green fridge (#4A9B8E) over stock blue | Cooler tone for fridge makes semantic sense (cold storage) without being the same blue as the old accent |
 | 2026-04-03 | Warm gold pantry (#D4A853) over stock orange | Warmer, more refined than the old warning-orange. Evokes dry goods, wood shelves. |
