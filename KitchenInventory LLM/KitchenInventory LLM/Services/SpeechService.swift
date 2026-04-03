@@ -216,6 +216,145 @@ actor SpeechService {
         print("[SpeechService] Stopped, state = idle")
     }
 
+    // MARK: - Continuous Listening (Voice Mode)
+
+    /// Starts continuous recording for Voice Mode. No silence/initial timeouts.
+    /// The stream keeps producing transcript updates until `stopListening()` is called.
+    /// If the recognition session ends naturally (~1 min API limit), it automatically chains
+    /// to a new session, accumulating the transcript across sessions.
+    func startContinuousListening() async throws -> AsyncStream<String> {
+        guard state == .idle else {
+            print("[SpeechService] Cannot start continuous: state is \(state), not idle")
+            throw KitchenError.speechUnavailable
+        }
+
+        guard speechRecognizer.isAvailable else {
+            print("[SpeechService] Speech recognizer not available")
+            throw KitchenError.speechUnavailable
+        }
+
+        let (micGranted, speechGranted) = isFullyAuthorized()
+        guard micGranted else { throw KitchenError.microphoneDenied }
+        guard speechGranted else { throw KitchenError.speechUnavailable }
+
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playAndRecord, options: [.duckOthers, .defaultToSpeaker])
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+        state = .recording
+
+        // Shared state for session chaining (all Sendable via locks)
+        let accumulated = OSAllocatedUnfairLock<String>(initialState: "")
+        let isActive = OSAllocatedUnfairLock<Bool>(initialState: true)
+
+        // Set up audio engine and first recognition request
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        if speechRecognizer.supportsOnDeviceRecognition {
+            request.requiresOnDeviceRecognition = false
+        }
+        self.recognitionRequest = request
+
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            request.append(buffer)
+        }
+
+        audioEngine.prepare()
+        try audioEngine.start()
+        print("[SpeechService] Continuous listening started")
+
+        let stream = AsyncStream<String> { continuation in
+            self.startContinuousRecognitionTask(
+                request: request,
+                accumulated: accumulated,
+                isActive: isActive,
+                continuation: continuation
+            )
+
+            continuation.onTermination = { @Sendable _ in
+                isActive.withLock { $0 = false }
+            }
+        }
+
+        return stream
+    }
+
+    /// Creates a recognition task that chains to the next session on completion.
+    private func startContinuousRecognitionTask(
+        request: SFSpeechAudioBufferRecognitionRequest,
+        accumulated: OSAllocatedUnfairLock<String>,
+        isActive: OSAllocatedUnfairLock<Bool>,
+        continuation: AsyncStream<String>.Continuation
+    ) {
+        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
+            if let result = result {
+                let segmentText = result.bestTranscription.formattedString
+                let prefix = accumulated.withLock { $0 }
+                let fullText = prefix.isEmpty ? segmentText : "\(prefix) \(segmentText)"
+                continuation.yield(fullText)
+
+                if result.isFinal {
+                    accumulated.withLock { $0 = fullText }
+                    let active = isActive.withLock { $0 }
+                    if active {
+                        print("[SpeechService] Session ended (isFinal), chaining...")
+                        Task { await self?.chainRecognitionSession(accumulated: accumulated, isActive: isActive, continuation: continuation) }
+                    } else {
+                        continuation.finish()
+                    }
+                }
+            }
+
+            if error != nil {
+                let active = isActive.withLock { $0 }
+                if active {
+                    print("[SpeechService] Session error, attempting chain: \(error!.localizedDescription)")
+                    Task { await self?.chainRecognitionSession(accumulated: accumulated, isActive: isActive, continuation: continuation) }
+                } else {
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    /// Chains to a new recognition session after the previous one ends (~1 min API limit).
+    private func chainRecognitionSession(
+        accumulated: OSAllocatedUnfairLock<String>,
+        isActive: OSAllocatedUnfairLock<Bool>,
+        continuation: AsyncStream<String>.Continuation
+    ) {
+        guard state == .recording else {
+            continuation.finish()
+            return
+        }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        if speechRecognizer.supportsOnDeviceRecognition {
+            request.requiresOnDeviceRecognition = false
+        }
+        self.recognitionRequest = request
+
+        // Reinstall audio tap with the new request
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            request.append(buffer)
+        }
+
+        startContinuousRecognitionTask(
+            request: request,
+            accumulated: accumulated,
+            isActive: isActive,
+            continuation: continuation
+        )
+
+        print("[SpeechService] Chained to new recognition session")
+    }
+
     // MARK: - Cleanup
 
     /// Force cleanup — call when the view disappears.

@@ -24,10 +24,26 @@ final class AIViewModel: ObservableObject {
     // Undo support
     @Published var undoToast: UndoAction?
 
-    // Voice state
+    // Voice state (legacy single-shot mode)
     @Published var isRecording: Bool = false
     @Published var partialTranscript: String = ""
     @Published var showTypingSuggestion: Bool = false
+
+    // MARK: - Voice Mode State (Option B: continuous recording)
+
+    enum VoiceSessionState: Equatable {
+        case idle
+        case voiceMode        // Recording, user talking freely
+        case processing       // Transcript sent to AI for parsing
+        case confirming       // Parsed items shown for review
+    }
+
+    @Published var voiceSessionState: VoiceSessionState = .idle
+    @Published var voiceTranscript: String = ""
+    @Published var parsedItems: [ParsedItem] = []
+    @Published var voiceModeError: String?
+
+    var isInVoiceMode: Bool { voiceSessionState != .idle }
 
     // Quick-add (learned from purchase history)
     @Published var quickAddItems: [PurchaseHistory] = []
@@ -36,9 +52,11 @@ final class AIViewModel: ObservableObject {
 
     private let apiService = ClaudeAPIService()
     private let speechService = SpeechService()
+    private let itemParser = VoiceItemParser()
     private let model = "claude-haiku-4-5"
     private var currentTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
+    private var voiceModeTask: Task<Void, Never>?
     private var consecutiveVoiceFailures: Int = 0
 
     // MARK: - Action Chips
@@ -329,6 +347,214 @@ final class AIViewModel: ObservableObject {
         saveContext(modelContext, label: "clear chat")
     }
 
+    // MARK: - Voice Mode (Option B)
+
+    /// Enter Voice Mode — starts continuous recording, no auto-stop.
+    func enterVoiceMode(modelContext: ModelContext) {
+        voiceModeTask?.cancel()
+        voiceTranscript = ""
+        parsedItems = []
+        voiceModeError = nil
+        voiceSessionState = .voiceMode
+        HapticsHelper.success()
+
+        voiceModeTask = Task {
+            do {
+                // Request permissions if needed
+                let (micGranted, speechGranted) = speechService.isFullyAuthorized()
+                if !micGranted || !speechGranted {
+                    let granted = await speechService.requestPermissions()
+                    if !granted {
+                        let (newMic, _) = speechService.isFullyAuthorized()
+                        voiceModeError = newMic
+                            ? (KitchenError.speechUnavailable.errorDescription ?? "Speech recognition unavailable.")
+                            : (KitchenError.microphoneDenied.errorDescription ?? "Microphone access denied.")
+                        voiceSessionState = .idle
+                        return
+                    }
+                }
+
+                let stream = try await speechService.startContinuousListening()
+
+                for await transcript in stream {
+                    guard !Task.isCancelled else { break }
+                    voiceTranscript = transcript
+                }
+
+                // Stream ended naturally (shouldn't happen in continuous mode unless chaining failed)
+                await speechService.stopListening()
+
+            } catch is CancellationError {
+                // Cancelled by user tapping Done or Cancel — expected
+            } catch {
+                voiceModeError = error.localizedDescription
+                voiceSessionState = .idle
+                HapticsHelper.error()
+            }
+        }
+    }
+
+    /// User tapped Done — stop recording and process the transcript.
+    func finishVoiceMode(modelContext: ModelContext) {
+        voiceModeTask?.cancel()
+
+        Task {
+            await speechService.stopListening()
+        }
+
+        let transcript = voiceTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !transcript.isEmpty else {
+            voiceSessionState = .idle
+            voiceTranscript = ""
+            HapticsHelper.warning()
+            return
+        }
+
+        voiceSessionState = .processing
+        HapticsHelper.tap()
+
+        Task {
+            do {
+                let items = try await itemParser.parse(transcript: transcript, modelContext: modelContext)
+
+                if items.isEmpty {
+                    voiceModeError = "Couldn't identify any items. Try again?"
+                    voiceSessionState = .idle
+                    HapticsHelper.warning()
+                } else {
+                    parsedItems = items
+                    voiceSessionState = .confirming
+                    HapticsHelper.success()
+                }
+            } catch {
+                voiceModeError = "Failed to process: \(error.localizedDescription)"
+                voiceSessionState = .idle
+                HapticsHelper.error()
+            }
+        }
+    }
+
+    /// Cancel Voice Mode entirely — discard everything.
+    func cancelVoiceMode() {
+        voiceModeTask?.cancel()
+        Task {
+            await speechService.stopListening()
+        }
+        voiceSessionState = .idle
+        voiceTranscript = ""
+        parsedItems = []
+        voiceModeError = nil
+    }
+
+    /// Commit all confirmed items to inventory.
+    func confirmAndAddItems(modelContext: ModelContext) {
+        guard !parsedItems.isEmpty else { return }
+
+        let count = parsedItems.count
+        HapticsHelper.success()
+
+        for parsed in parsedItems {
+            let item = InventoryItem(
+                name: parsed.name,
+                category: parsed.category,
+                storageLocation: parsed.storage,
+                purchaseDate: parsed.purchaseDate,
+                estimatedExpiration: parsed.expirationDays.map { DateHelper.daysFromNow($0) },
+                quantity: parsed.quantity,
+                unit: parsed.unit,
+                source: "voice"
+            )
+            modelContext.insert(item)
+
+            // Upsert purchase history
+            upsertPurchaseHistory(
+                name: parsed.name,
+                storage: parsed.storage,
+                category: parsed.category,
+                expirationDays: parsed.expirationDays,
+                context: modelContext
+            )
+        }
+
+        saveContext(modelContext, label: "voice mode add items")
+
+        // Show confirmation in chat
+        let itemNames = parsedItems.map { $0.name }.joined(separator: ", ")
+        let confirmMessage = ChatMessage(role: "assistant", content: "Added \(count) item\(count == 1 ? "" : "s") from voice: \(itemNames)")
+        modelContext.insert(confirmMessage)
+        messages.append(confirmMessage)
+        hasStartedChat = true
+        saveContext(modelContext, label: "voice confirm message")
+
+        // Reset state
+        voiceSessionState = .idle
+        voiceTranscript = ""
+        parsedItems = []
+
+        // Refresh quick-add
+        refreshQuickAdd(modelContext: modelContext)
+    }
+
+    /// Remove a single item from the parsed list during confirmation.
+    func removeParsedItem(_ item: ParsedItem) {
+        parsedItems.removeAll { $0.id == item.id }
+        if parsedItems.isEmpty {
+            voiceSessionState = .idle
+        }
+    }
+
+    /// Update a parsed item's storage location.
+    func updateParsedItemStorage(_ item: ParsedItem, to storage: StorageLocation) {
+        guard let index = parsedItems.firstIndex(where: { $0.id == item.id }) else { return }
+        parsedItems[index].storage = storage
+    }
+
+    /// Update a parsed item's quantity.
+    func updateParsedItemQuantity(_ item: ParsedItem, to quantity: Double) {
+        guard let index = parsedItems.firstIndex(where: { $0.id == item.id }) else { return }
+        parsedItems[index].quantity = max(0.01, quantity)
+    }
+
+    /// Update a parsed item's purchase date.
+    func updateParsedItemDate(_ item: ParsedItem, to date: Date) {
+        guard let index = parsedItems.firstIndex(where: { $0.id == item.id }) else { return }
+        parsedItems[index].purchaseDate = date
+    }
+
+    // MARK: - Private: Purchase History Upsert
+
+    private func upsertPurchaseHistory(
+        name: String,
+        storage: StorageLocation,
+        category: String,
+        expirationDays: Int?,
+        context: ModelContext
+    ) {
+        let canonicalName = name.lowercased().trimmingCharacters(in: .whitespaces)
+        let descriptor = FetchDescriptor<PurchaseHistory>(
+            predicate: #Predicate { $0.canonicalName == canonicalName }
+        )
+
+        if let existing = try? context.fetch(descriptor).first {
+            existing.purchaseCount += 1
+            existing.lastPurchaseDate = .now
+            existing.preferredStorage = storage
+            if let days = expirationDays, existing.purchaseCount > 0 {
+                let previousTotal = existing.averageExpirationDays * Double(existing.purchaseCount - 1)
+                existing.averageExpirationDays = (previousTotal + Double(days)) / Double(existing.purchaseCount)
+            }
+        } else {
+            let history = PurchaseHistory(
+                canonicalName: canonicalName,
+                preferredStorage: storage,
+                averageExpirationDays: Double(expirationDays ?? 7),
+                category: category
+            )
+            context.insert(history)
+        }
+    }
+
     // MARK: - Dismiss Undo Toast
 
     func dismissUndo() {
@@ -339,6 +565,7 @@ final class AIViewModel: ObservableObject {
 
     func teardown() {
         recordingTask?.cancel()
+        voiceModeTask?.cancel()
         Task {
             await speechService.teardown()
         }

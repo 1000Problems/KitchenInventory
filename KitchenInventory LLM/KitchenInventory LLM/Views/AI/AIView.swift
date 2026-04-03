@@ -75,6 +75,55 @@ struct AIView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            // Voice Mode full-screen overlays
+            .fullScreenCover(isPresented: voiceModeBinding) {
+                voiceModeOverlay
+            }
+            .alert("Voice Mode", isPresented: voiceErrorBinding) {
+                Button("OK", role: .cancel) {
+                    viewModel.voiceModeError = nil
+                }
+            } message: {
+                Text(viewModel.voiceModeError ?? "Something went wrong.")
+            }
+        }
+    }
+
+    // MARK: - Voice Mode Binding
+
+    /// Bridges the enum state to a Bool binding for fullScreenCover.
+    private var voiceModeBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isInVoiceMode },
+            set: { newValue in
+                if !newValue {
+                    viewModel.cancelVoiceMode()
+                }
+            }
+        )
+    }
+
+    private var voiceErrorBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.voiceModeError != nil },
+            set: { if !$0 { viewModel.voiceModeError = nil } }
+        )
+    }
+
+    // MARK: - Voice Mode Overlay
+
+    @ViewBuilder
+    private var voiceModeOverlay: some View {
+        switch viewModel.voiceSessionState {
+        case .idle:
+            // Shown briefly during dismiss animation
+            Color.appBg.ignoresSafeArea()
+        case .voiceMode:
+            VoiceModeView(viewModel: viewModel, modelContext: modelContext)
+        case .processing:
+            VoiceProcessingView()
+        case .confirming:
+            VoiceConfirmationView(viewModel: viewModel, modelContext: modelContext)
         }
     }
 
@@ -340,14 +389,14 @@ struct AIView: View {
             } else {
                 // Normal state: mic hero + text field
                 HStack(spacing: 12) {
-                    // Mic button — LEFT side, hero element
+                    // Mic button — LEFT side, hero element → enters Voice Mode
                     Button {
-                        viewModel.toggleRecording(modelContext: modelContext)
+                        viewModel.enterVoiceMode(modelContext: modelContext)
                     } label: {
                         MicButtonView(isRecording: false)
                     }
                     .disabled(viewModel.isLoading)
-                    .accessibilityLabel("Start voice input")
+                    .accessibilityLabel("Start voice mode")
 
                     // Text field
                     TextField("Ask me anything...", text: $viewModel.inputText, axis: .vertical)
@@ -391,7 +440,7 @@ struct AIView: View {
 
     private var listeningBar: some View {
         Button {
-            viewModel.toggleRecording(modelContext: modelContext)
+            viewModel.stopRecording(sendMessage: true, modelContext: modelContext)
         } label: {
             HStack(spacing: 14) {
                 MicButtonView(isRecording: true)
