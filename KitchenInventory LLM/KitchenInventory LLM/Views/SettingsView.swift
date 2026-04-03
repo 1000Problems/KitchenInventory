@@ -156,7 +156,7 @@ struct SettingsView: View {
                 Text("Model")
                     .foregroundColor(.textPrimary)
                 Spacer()
-                Text("claude-opus-4-6")
+                Text("claude-haiku-4-5")
                     .foregroundColor(.textSecondary)
                     .font(.caption)
             }
@@ -300,7 +300,7 @@ struct SettingsView: View {
                 request.timeoutInterval = 10
 
                 let body: [String: Any] = [
-                    "model": "claude-opus-4-6",
+                    "model": "claude-haiku-4-5",
                     "max_tokens": 1,
                     "messages": [["role": "user", "content": "hi"]]
                 ]

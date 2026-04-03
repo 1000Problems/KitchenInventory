@@ -36,7 +36,7 @@ final class AIViewModel: ObservableObject {
 
     private let apiService = ClaudeAPIService()
     private let speechService = SpeechService()
-    private let model = "claude-opus-4-6"
+    private let model = "claude-haiku-4-5"
     private var currentTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
     private var consecutiveVoiceFailures: Int = 0
