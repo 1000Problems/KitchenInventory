@@ -1,0 +1,1 @@
+/sessions/jolly-loving-ritchie/mnt/KitchenInventory/.claude/skills/gstack/codex/SKILL.md
