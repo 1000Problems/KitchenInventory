@@ -285,57 +285,102 @@ struct AIView: View {
     // MARK: - Input Bar
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField(
-                viewModel.isRecording ? "Listening..." : "Ask me anything...",
-                text: $viewModel.inputText,
-                axis: .vertical
-            )
-            .textFieldStyle(.plain)
-            .lineLimit(1...4)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color.surface1)
-            .clipShape(RoundedRectangle(cornerRadius: 22))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22)
-                    .stroke(
-                        viewModel.isRecording ? Color.accent : Color.border,
-                        lineWidth: viewModel.isRecording ? 1.5 : 0.5
-                    )
-            )
-            .focused($isInputFocused)
-            .disabled(viewModel.isRecording)
+        VStack(spacing: 0) {
+            // Recording state: full-width listening indicator
+            if viewModel.isRecording {
+                listeningBar
+            } else {
+                // Normal state: mic hero + text field
+                HStack(spacing: 12) {
+                    // Mic button — LEFT side, hero element
+                    Button {
+                        viewModel.toggleRecording(modelContext: modelContext)
+                    } label: {
+                        MicButtonView(isRecording: false)
+                    }
+                    .disabled(viewModel.isLoading)
+                    .accessibilityLabel("Start voice input")
 
-            // Mic button
-            Button {
-                viewModel.toggleRecording(modelContext: modelContext)
-            } label: {
-                MicButtonView(isRecording: viewModel.isRecording)
-            }
-            .disabled(viewModel.isLoading)
-            .accessibilityLabel(viewModel.isRecording ? "Stop recording" : "Start voice input")
+                    // Text field
+                    TextField("Ask me anything...", text: $viewModel.inputText, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...4)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.surface1)
+                        .clipShape(RoundedRectangle(cornerRadius: 22))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22)
+                                .stroke(Color.border, lineWidth: 0.5)
+                        )
+                        .focused($isInputFocused)
 
-            // Send button (only show when there's text and not recording)
-            if !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isRecording {
-                Button {
-                    viewModel.sendMessage(modelContext: modelContext)
-                    isInputFocused = false
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 34))
-                        .foregroundColor(.accent)
+                    // Send button (only visible when there's text)
+                    if !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button {
+                            viewModel.sendMessage(modelContext: modelContext)
+                            isInputFocused = false
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 34))
+                                .foregroundColor(.accent)
+                        }
+                        .disabled(viewModel.isLoading)
+                        .accessibilityLabel("Send message")
+                        .transition(.scale.combined(with: .opacity))
+                    }
                 }
-                .disabled(viewModel.isLoading)
-                .accessibilityLabel("Send message")
-                .transition(.scale.combined(with: .opacity))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .background(Color.appBg)
         .animation(.easeInOut(duration: 0.2), value: viewModel.isRecording)
         .animation(.easeInOut(duration: 0.2), value: viewModel.inputText.isEmpty)
+    }
+
+    // MARK: - Listening Bar (replaces input bar when recording)
+
+    private var listeningBar: some View {
+        Button {
+            viewModel.toggleRecording(modelContext: modelContext)
+        } label: {
+            HStack(spacing: 14) {
+                MicButtonView(isRecording: true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(viewModel.partialTranscript.isEmpty ? "Listening..." : viewModel.partialTranscript)
+                        .font(.body)
+                        .foregroundColor(viewModel.partialTranscript.isEmpty ? .textMuted : .textPrimary)
+                        .lineLimit(2)
+
+                    if viewModel.partialTranscript.isEmpty {
+                        Text("Tap to stop")
+                            .font(.caption)
+                            .foregroundColor(.textMuted)
+                    }
+                }
+
+                Spacer()
+
+                // Stop indicator
+                Image(systemName: "stop.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundColor(.error)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.accent.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 22))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(Color.accent, lineWidth: 1.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .accessibilityLabel("Stop recording. \(viewModel.partialTranscript.isEmpty ? "Listening" : viewModel.partialTranscript)")
     }
 
     // MARK: - Undo Toast
@@ -377,34 +422,45 @@ struct MicButtonView: View {
 
     var body: some View {
         ZStack {
-            // Pulse ring (recording only)
             if isRecording {
+                // Pulse ring while recording
                 Circle()
-                    .fill(Color.accent.opacity(0.2))
-                    .frame(width: 44, height: 44)
+                    .fill(Color.error.opacity(0.15))
+                    .frame(width: 52, height: 52)
                     .scaleEffect(reduceMotion ? 1.0 : pulseScale)
-                    .opacity(reduceMotion ? 0.6 : (pulseScale > 1.2 ? 0.0 : 0.4))
+                    .opacity(reduceMotion ? 0.6 : (pulseScale > 1.2 ? 0.0 : 0.5))
+
+                // Recording state — red circle with white mic
+                Circle()
+                    .fill(Color.error)
+                    .frame(width: 44, height: 44)
+
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
+            } else {
+                // Idle state — accent filled circle, prominent
+                Circle()
+                    .fill(Color.accent)
+                    .frame(width: 44, height: 44)
+                    .shadow(color: Color.accent.opacity(0.3), radius: 4, x: 0, y: 2)
+
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
             }
-
-            // Button background
-            Circle()
-                .fill(isRecording ? Color.accent : Color.clear)
-                .frame(width: 36, height: 36)
-
-            // Mic icon
-            Image(systemName: isRecording ? "mic.circle.fill" : "mic.fill")
-                .font(.system(size: isRecording ? 34 : 22))
-                .foregroundColor(isRecording ? .white : .textSecondary)
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 52, height: 52)
         .contentShape(Circle())
         .onChange(of: isRecording) {
             if isRecording && !reduceMotion {
                 withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                    pulseScale = 1.4
+                    pulseScale = 1.5
                 }
             } else {
-                pulseScale = 1.0
+                withAnimation(.easeOut(duration: 0.2)) {
+                    pulseScale = 1.0
+                }
             }
         }
     }

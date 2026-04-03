@@ -31,15 +31,19 @@ actor SpeechService {
 
     // MARK: - Configuration
 
-    /// Seconds of silence before auto-stop
+    /// Seconds of silence AFTER first speech detected before auto-stop
     let silenceTimeout: TimeInterval
+
+    /// Seconds to wait for first speech before giving up
+    let initialTimeout: TimeInterval
 
     // MARK: - Init
 
-    init(locale: Locale = .current, silenceTimeout: TimeInterval = 2.0) {
+    init(locale: Locale = .current, silenceTimeout: TimeInterval = 2.5, initialTimeout: TimeInterval = 8.0) {
         self.speechRecognizer = SFSpeechRecognizer(locale: locale)
             ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
         self.silenceTimeout = silenceTimeout
+        self.initialTimeout = initialTimeout
     }
 
     // MARK: - Permissions
@@ -74,19 +78,23 @@ actor SpeechService {
     /// The stream completes when recording stops (manually or via silence timeout).
     func startListening() async throws -> AsyncStream<String> {
         guard state == .idle else {
+            print("[SpeechService] Cannot start: state is \(state), not idle")
             throw KitchenError.speechUnavailable
         }
 
         guard speechRecognizer.isAvailable else {
+            print("[SpeechService] Speech recognizer not available")
             throw KitchenError.speechUnavailable
         }
 
         // Check permissions
         let (micGranted, speechGranted) = isFullyAuthorized()
         guard micGranted else {
+            print("[SpeechService] Microphone not granted")
             throw KitchenError.microphoneDenied
         }
         guard speechGranted else {
+            print("[SpeechService] Speech recognition not authorized")
             throw KitchenError.speechUnavailable
         }
 
@@ -99,9 +107,12 @@ actor SpeechService {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
 
-        // Prefer on-device when available
+        // Prefer on-device but DON'T require it — fall back to server-based if unavailable
         if speechRecognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
+            request.requiresOnDeviceRecognition = false // prefer but don't require
+            print("[SpeechService] On-device recognition available, will prefer it")
+        } else {
+            print("[SpeechService] On-device recognition NOT available, using server-based")
         }
 
         self.recognitionRequest = request
@@ -110,26 +121,31 @@ actor SpeechService {
         // Install audio tap
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
             request.append(buffer)
         }
 
         audioEngine.prepare()
         try audioEngine.start()
+        print("[SpeechService] Audio engine started, listening...")
 
         // Build the stream
-        let timeout = self.silenceTimeout
+        let silenceTime = self.silenceTimeout
+        let initialTime = self.initialTimeout
         let timerLock = OSAllocatedUnfairLock<DispatchWorkItem?>(initialState: nil)
         let timerQueue = DispatchQueue(label: "com.kitcheninventory.silence-timer")
+        let hasReceivedSpeech = OSAllocatedUnfairLock<Bool>(initialState: false)
 
         // Sendable helpers that capture only Sendable values
-        let scheduleTimeout: @Sendable () -> Void = { [weak request] in
+        let scheduleTimeout: @Sendable (_ duration: TimeInterval) -> Void = { [weak request] duration in
             timerLock.withLock { $0?.cancel() }
             let work = DispatchWorkItem { [weak request] in
+                print("[SpeechService] Silence timeout fired (\(duration)s)")
                 request?.endAudio()
             }
             timerLock.withLock { $0 = work }
-            timerQueue.asyncAfter(deadline: .now() + timeout, execute: work)
+            timerQueue.asyncAfter(deadline: .now() + duration, execute: work)
         }
 
         let cancelTimeout: @Sendable () -> Void = {
@@ -140,24 +156,30 @@ actor SpeechService {
         }
 
         let stream = AsyncStream<String> { continuation in
-            // Schedule initial silence timeout
-            scheduleTimeout()
+            // Schedule INITIAL timeout — generous, gives user time to start speaking
+            // and gives the recognizer time to warm up
+            scheduleTimeout(initialTime)
 
             self.recognitionTask = self.speechRecognizer.recognitionTask(with: request) { result, error in
                 if let result = result {
                     let transcript = result.bestTranscription.formattedString
+                    print("[SpeechService] Transcript: \"\(transcript)\" (final: \(result.isFinal))")
                     continuation.yield(transcript)
+
+                    // Mark that we've received speech
+                    hasReceivedSpeech.withLock { $0 = true }
 
                     if result.isFinal {
                         cancelTimeout()
                         continuation.finish()
                     } else {
-                        // Reset silence timer on each partial result
-                        scheduleTimeout()
+                        // After first speech, use the shorter silence timeout
+                        scheduleTimeout(silenceTime)
                     }
                 }
 
-                if error != nil {
+                if let error = error {
+                    print("[SpeechService] Recognition error: \(error.localizedDescription)")
                     cancelTimeout()
                     continuation.finish()
                 }
@@ -177,6 +199,7 @@ actor SpeechService {
     func stopListening() {
         guard state == .recording else { return }
         state = .stopping
+        print("[SpeechService] Stopping...")
 
         recognitionRequest?.endAudio()
         audioEngine.stop()
@@ -190,6 +213,7 @@ actor SpeechService {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
         state = .idle
+        print("[SpeechService] Stopped, state = idle")
     }
 
     // MARK: - Cleanup

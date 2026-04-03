@@ -185,14 +185,20 @@ final class AIViewModel: ObservableObject {
                     lastTranscript = transcript
                 }
 
-                // Stream ended (silence timeout or final result)
-                guard !Task.isCancelled else { return }
+                // Stream ended — always clean up the audio engine
+                await speechService.stopListening()
+
+                guard !Task.isCancelled else {
+                    isRecording = false
+                    return
+                }
 
                 isRecording = false
 
                 if lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     // No speech detected — count as a failure
                     consecutiveVoiceFailures += 1
+                    print("[Voice] No speech detected. Failure count: \(consecutiveVoiceFailures)")
                     if consecutiveVoiceFailures >= 2 {
                         showTypingSuggestion = true
                     }
@@ -205,8 +211,10 @@ final class AIViewModel: ObservableObject {
                 }
 
             } catch {
+                await speechService.stopListening()
                 isRecording = false
                 consecutiveVoiceFailures += 1
+                print("[Voice] Error: \(error.localizedDescription). Failure count: \(consecutiveVoiceFailures)")
                 if consecutiveVoiceFailures >= 2 {
                     showTypingSuggestion = true
                 }
