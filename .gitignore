@@ -15,3 +15,7 @@ DerivedData/
 
 # gstack node_modules
 .claude/skills/gstack/node_modules/
+
+# Local convenience scripts
+push.sh
+push.command

@@ -32,6 +32,17 @@ struct KitchenPromptBuilder {
 
         For recipes, suggest practical meals using ingredients the user actually has. \
         Prioritize items that are expiring soon.
+
+        VOICE INPUT: The user may speak naturally about their kitchen items via voice. \
+        Parse spoken descriptions like "I have milk, a dozen eggs, some chicken I bought yesterday" \
+        into structured inventory additions. Infer storage locations from context — dairy and meat \
+        go in the fridge, frozen items go in the freezer, canned goods go in the pantry. \
+        Infer quantities from natural language: "a dozen" = 12, "a couple" = 2, "some" = 1. \
+        Estimate purchase and expiration dates from context clues like "bought yesterday" or \
+        "just got". After adding items, confirm conversationally: "Added milk, 12 eggs, and \
+        chicken to your fridge. Chicken expires around April 5th. Sound right?" \
+        Handle follow-up corrections naturally: "Actually move the eggs to the pantry" fires move_items. \
+        If you can't parse the voice input clearly, ask for clarification rather than guessing wrong.
         """
     }
 

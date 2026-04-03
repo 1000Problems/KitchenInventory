@@ -24,11 +24,19 @@ final class AIViewModel: ObservableObject {
     // Undo support
     @Published var undoToast: UndoAction?
 
+    // Voice state
+    @Published var isRecording: Bool = false
+    @Published var partialTranscript: String = ""
+    @Published var showTypingSuggestion: Bool = false
+
     // MARK: - Dependencies
 
     private let apiService = ClaudeAPIService()
+    private let speechService = SpeechService()
     private let model = "claude-haiku-4-5"
     private var currentTask: Task<Void, Never>?
+    private var recordingTask: Task<Void, Never>?
+    private var consecutiveVoiceFailures: Int = 0
 
     // MARK: - Action Chips
 
@@ -64,6 +72,7 @@ final class AIViewModel: ObservableObject {
         currentTask?.cancel()
 
         inputText = ""
+        partialTranscript = ""
         hasStartedChat = true
         errorMessage = nil
 
@@ -132,6 +141,106 @@ final class AIViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Voice Input
+
+    /// Toggles recording on/off. When recording stops, sends the transcribed text.
+    func toggleRecording(modelContext: ModelContext) {
+        if isRecording {
+            stopRecording(sendMessage: true, modelContext: modelContext)
+        } else {
+            startRecording(modelContext: modelContext)
+        }
+    }
+
+    private func startRecording(modelContext: ModelContext) {
+        recordingTask?.cancel()
+        partialTranscript = ""
+        showTypingSuggestion = false
+
+        recordingTask = Task {
+            // Request permissions if needed
+            let (micGranted, speechGranted) = speechService.isFullyAuthorized()
+            if !micGranted || !speechGranted {
+                let granted = await speechService.requestPermissions()
+                if !granted {
+                    let (newMic, _) = speechService.isFullyAuthorized()
+                    if !newMic {
+                        addErrorMessage(KitchenError.microphoneDenied.errorDescription ?? "Microphone access denied.", modelContext: modelContext)
+                    } else {
+                        addErrorMessage(KitchenError.speechUnavailable.errorDescription ?? "Speech recognition unavailable.", modelContext: modelContext)
+                    }
+                    return
+                }
+            }
+
+            do {
+                isRecording = true
+                let stream = try await speechService.startListening()
+
+                var lastTranscript = ""
+                for await transcript in stream {
+                    guard !Task.isCancelled else { break }
+                    partialTranscript = transcript
+                    inputText = transcript
+                    lastTranscript = transcript
+                }
+
+                // Stream ended (silence timeout or final result)
+                guard !Task.isCancelled else { return }
+
+                isRecording = false
+
+                if lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // No speech detected — count as a failure
+                    consecutiveVoiceFailures += 1
+                    if consecutiveVoiceFailures >= 2 {
+                        showTypingSuggestion = true
+                    }
+                    partialTranscript = ""
+                    inputText = ""
+                } else {
+                    // Success — reset failure counter and send
+                    consecutiveVoiceFailures = 0
+                    sendMessage(lastTranscript, modelContext: modelContext)
+                }
+
+            } catch {
+                isRecording = false
+                consecutiveVoiceFailures += 1
+                if consecutiveVoiceFailures >= 2 {
+                    showTypingSuggestion = true
+                }
+
+                if let kitchenErr = error as? KitchenError {
+                    addErrorMessage(kitchenErr.errorDescription ?? "Voice error.", modelContext: modelContext)
+                }
+            }
+        }
+    }
+
+    func stopRecording(sendMessage shouldSend: Bool, modelContext: ModelContext) {
+        Task {
+            await speechService.stopListening()
+        }
+        isRecording = false
+
+        if shouldSend && !partialTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            consecutiveVoiceFailures = 0
+            let text = partialTranscript
+            partialTranscript = ""
+            sendMessage(text, modelContext: modelContext)
+        } else {
+            partialTranscript = ""
+            inputText = ""
+        }
+    }
+
+    /// Dismiss the "try typing" suggestion
+    func dismissTypingSuggestion() {
+        showTypingSuggestion = false
+        consecutiveVoiceFailures = 0
+    }
+
     // MARK: - Private Helpers
 
     private func addErrorMessage(_ text: String, modelContext: ModelContext) {
@@ -172,7 +281,10 @@ final class AIViewModel: ObservableObject {
 
     func clearChat(modelContext: ModelContext) {
         currentTask?.cancel()
+        recordingTask?.cancel()
         isLoading = false
+        isRecording = false
+        partialTranscript = ""
 
         let descriptor = FetchDescriptor<ChatMessage>()
         do {
@@ -192,5 +304,14 @@ final class AIViewModel: ObservableObject {
 
     func dismissUndo() {
         undoToast = nil
+    }
+
+    // MARK: - Teardown
+
+    func teardown() {
+        recordingTask?.cancel()
+        Task {
+            await speechService.teardown()
+        }
     }
 }

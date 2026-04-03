@@ -26,12 +26,24 @@ struct AIView: View {
                         actionFirstView
                     }
 
+                    // "Having trouble? Try typing instead" fallback
+                    if viewModel.showTypingSuggestion {
+                        typingSuggestionBanner
+                    }
+
                     inputBar
                 }
             }
             .navigationTitle("AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Recording indicator in nav bar
+                if viewModel.isRecording {
+                    ToolbarItem(placement: .topBarLeading) {
+                        RecordingDotView()
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button(role: .destructive) {
@@ -53,6 +65,9 @@ struct AIView: View {
             }
             .onAppear {
                 viewModel.loadHistory(modelContext: modelContext)
+            }
+            .onDisappear {
+                viewModel.teardown()
             }
             .overlay(alignment: .bottom) {
                 if let undo = viewModel.undoToast {
@@ -230,41 +245,97 @@ struct AIView: View {
         }
     }
 
+    // MARK: - Typing Suggestion Banner
+
+    private var typingSuggestionBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "keyboard")
+                .font(.subheadline)
+                .foregroundColor(.accent)
+
+            Text("Having trouble? Try typing instead")
+                .font(.subheadline)
+                .foregroundColor(.textSecondary)
+
+            Spacer()
+
+            Button {
+                viewModel.dismissTypingSuggestion()
+                isInputFocused = true
+            } label: {
+                Text("Type")
+                    .font(.subheadline.bold())
+                    .foregroundColor(.accent)
+            }
+
+            Button {
+                viewModel.dismissTypingSuggestion()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2)
+                    .foregroundColor(.textMuted)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.surface2)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
     // MARK: - Input Bar
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Ask me anything...", text: $viewModel.inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.surface1)
-                .clipShape(RoundedRectangle(cornerRadius: 22))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22)
-                        .stroke(Color.border, lineWidth: 0.5)
-                )
-                .focused($isInputFocused)
-
-            Button {
-                viewModel.sendMessage(modelContext: modelContext)
-                isInputFocused = false
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 34))
-                    .foregroundColor(
-                        viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? .textMuted
-                        : .accent
+            TextField(
+                viewModel.isRecording ? "Listening..." : "Ask me anything...",
+                text: $viewModel.inputText,
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .lineLimit(1...4)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.surface1)
+            .clipShape(RoundedRectangle(cornerRadius: 22))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(
+                        viewModel.isRecording ? Color.accent : Color.border,
+                        lineWidth: viewModel.isRecording ? 1.5 : 0.5
                     )
+            )
+            .focused($isInputFocused)
+            .disabled(viewModel.isRecording)
+
+            // Mic button
+            Button {
+                viewModel.toggleRecording(modelContext: modelContext)
+            } label: {
+                MicButtonView(isRecording: viewModel.isRecording)
             }
-            .disabled(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isLoading)
-            .accessibilityLabel("Send message")
+            .disabled(viewModel.isLoading)
+            .accessibilityLabel(viewModel.isRecording ? "Stop recording" : "Start voice input")
+
+            // Send button (only show when there's text and not recording)
+            if !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isRecording {
+                Button {
+                    viewModel.sendMessage(modelContext: modelContext)
+                    isInputFocused = false
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 34))
+                        .foregroundColor(.accent)
+                }
+                .disabled(viewModel.isLoading)
+                .accessibilityLabel("Send message")
+                .transition(.scale.combined(with: .opacity))
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color.appBg)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.isRecording)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.inputText.isEmpty)
     }
 
     // MARK: - Undo Toast
@@ -294,6 +365,69 @@ struct AIView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Mic Button View
+
+struct MicButtonView: View {
+    let isRecording: Bool
+    @State private var pulseScale: CGFloat = 1.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            // Pulse ring (recording only)
+            if isRecording {
+                Circle()
+                    .fill(Color.accent.opacity(0.2))
+                    .frame(width: 44, height: 44)
+                    .scaleEffect(reduceMotion ? 1.0 : pulseScale)
+                    .opacity(reduceMotion ? 0.6 : (pulseScale > 1.2 ? 0.0 : 0.4))
+            }
+
+            // Button background
+            Circle()
+                .fill(isRecording ? Color.accent : Color.clear)
+                .frame(width: 36, height: 36)
+
+            // Mic icon
+            Image(systemName: isRecording ? "mic.circle.fill" : "mic.fill")
+                .font(.system(size: isRecording ? 34 : 22))
+                .foregroundColor(isRecording ? .white : .textSecondary)
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
+        .onChange(of: isRecording) {
+            if isRecording && !reduceMotion {
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    pulseScale = 1.4
+                }
+            } else {
+                pulseScale = 1.0
+            }
+        }
+    }
+}
+
+// MARK: - Recording Dot (nav bar indicator)
+
+struct RecordingDotView: View {
+    @State private var isAnimating = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Circle()
+            .fill(Color.error)
+            .frame(width: 8, height: 8)
+            .opacity(reduceMotion ? 1.0 : (isAnimating ? 0.3 : 1.0))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    isAnimating = true
+                }
+            }
+            .accessibilityLabel("Recording in progress")
     }
 }
 
@@ -457,7 +591,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Claude API Key")
                 } footer: {
-                    Text("Your API key is stored securely in the device Keychain and never sent anywhere except Anthropic's API.")
+                    Text("Your API key is stored securely in the device Keychain and never sent anywhere except Anthropic's API. This key is for development only — the shipping app uses an on-device model.")
                 }
 
                 Section {
@@ -471,6 +605,20 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("AI Model")
+                }
+
+                Section {
+                    HStack {
+                        Text("All data stored on-device")
+                            .foregroundColor(.textPrimary)
+                        Spacer()
+                        Image(systemName: "lock.shield.fill")
+                            .foregroundColor(.success)
+                    }
+                } header: {
+                    Text("Privacy")
+                } footer: {
+                    Text("Your inventory data never leaves your device. The only network call is to the Claude API for AI responses.")
                 }
             }
             .scrollContentBackground(.hidden)
