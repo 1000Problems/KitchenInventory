@@ -164,6 +164,20 @@ enum KitchenError: Error {
 | Expiring chip (warning) | warning (10% opacity) | warning (#ff9500) | none | 6pt | none |
 | Expiring chip (danger) | error (10% opacity) | error (#ff3b30) | none | 6pt | none |
 
+### Dark Mode Tokens
+| Token | Light | Dark |
+|-------|-------|------|
+| surface1 | #ffffff | #1c1c1e |
+| surface2 | #f0f0f3 | #2c2c2e |
+| textPrimary | #1c1c1e | #ffffff |
+| textSecondary | #6c6c70 | #ababaf |
+| textMuted | #8e8e93 | #636366 |
+| border | #d1d1d6 | #38383a |
+| accent | #4a6cf7 | #5a7cf7 |
+| success | #34c759 | #30d158 |
+| warning | #ff9500 | #ff9f0a |
+| error | #ff3b30 | #ff453a |
+
 ### AI Response Formatting
 - **Inventory data:** Structured mini-cards within chat bubble. Each item = compact row with storage colored dot + name + expiration chip. Tappable for actions.
 - **Recipes:** Markdown-style. Bold ingredients, numbered steps. Rendered with AttributedString.
@@ -223,6 +237,7 @@ enum KitchenError: Error {
 - `AIView.swift` — Action-first layout per design spec (big chips → collapses to horizontal scroll after first message)
 - Dad joke display: one joke on load, rotates on each interaction (textMuted, small, surface2 card)
 - Action chips: "What's expiring?", "Recipe ideas", "Add items", "What can I cook?" — big pills, accent border
+- **Smart empty state:** When inventory has 0 items, show "Add items" chip prominently. Other chips dimmed with "(add items first)" subtitle. Prevents confusion on first launch.
 - After first message: chips collapse to small horizontal scroll above input
 - AI responses: structured mini-cards for inventory data, markdown for recipes, inline confirmation cards for destructive actions
 - Chat bubbles: user = accent bg right-aligned, AI = surface1 left-aligned (per component spec table)
@@ -289,6 +304,7 @@ enum KitchenError: Error {
 - Permission flow:
   - First tap → system permission dialogs (microphone, then speech recognition)
   - If denied → show inline card: "Microphone access needed" with [Open Settings] button
+- **Progressive fallback:** After 2 consecutive voice failures (silence timeout or no speech detected), show inline suggestion: "Having trouble? Try typing instead" with keyboard auto-focus on text field
 - Accessibility: VoiceOver announces "Start voice input" / "Stop recording"
 
 ### 1B.3 Voice-Optimized AI Behavior
@@ -484,11 +500,11 @@ enum KitchenError: Error {
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests | 1 | issues_found | 11 issues resolved (see below) |
-| Design Review | `/plan-design-review` | UI/UX gaps | 1 | issues_found | 7 passes, 10 decisions (see below) |
-| Outside Voice | Claude subagent | Independent challenge | 1 | issues_found | 12 findings, 3 tension points resolved |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | 5 premises evaluated, API key resolved (local HF model), voice pivot validated |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | unavailable | Codex not available in this environment |
+| Eng Review | `/plan-eng-review` | Architecture & tests | 2 | issues_found | 5 critical code fixes, 4 high-priority, 15 new test cases |
+| Design Review | `/plan-design-review` | UI/UX gaps | 2 | issues_found | 7 dimensions rated 7.4/10, smart chips, dark mode tokens, voice fallback |
+| Outside Voice | Claude subagent | Independent challenge | 2 | issues_found | 10 strategic findings, local model strategy confirmed |
 
 ### Eng Review Decisions
 1. Phase 1 split into 1A (AI chat) + 1B (voice input) — **accepted** (updated: receipt scanning deferred to post-MVP)
@@ -529,4 +545,35 @@ enum KitchenError: Error {
 | Unresolved Decisions | 3 | 8 |
 | **Overall** | **5** | **7.4** |
 
-**VERDICT:** REVIEWED — plan ready for implementation after resolving all findings.
+### Autoplan Review (2026-04-02) — CEO + Design + Eng
+
+**Strategic decisions:**
+1. Claude API is for dev/testing ONLY. Production ships with Hugging Face on-device model. No API key for users.
+2. 5-message conversation history CONFIRMED — designed for local model constraints.
+3. Phase order (1A manual → 1B voice) CONFIRMED — validates pipeline before adding speech complexity.
+4. Voice pivot over receipt scanning CONFIRMED — reuses 100% of existing tool pipeline.
+
+**Code fixes required (before shipping 1A):**
+1. Fix `daysFromNow` force unwrap → guard unwrap with error
+2. Add quantity validation: `quantity > 0` in InventoryItem, AddItemsTool, ConsumeItems
+3. Fix negative quantity in ConsumeItems: `max(0, item.quantity - consumeQty)`
+4. Store Task handle in AIViewModel for cancellation on new send
+5. Fix case-insensitive `contains` → exact match first, then fallback
+6. Replace `try? modelContext.save()` with explicit error logging
+7. Add 90-second aggregate timeout on tool-call loop
+8. Guard purchase history upsert divide-by-zero (`purchaseCount > 0`)
+
+**Design additions:**
+1. Smart empty-state chips: when inventory is empty, show only "Add items" prominently, others dimmed
+2. Voice progressive fallback: after 2 failed voice attempts, suggest typing with keyboard auto-focus
+3. Model parsing fallback: if AI can't parse voice input, ask for clarification
+4. Dark mode tokens: add dark mode column to component spec table
+5. Add "search chat history" to Phase 4 polish backlog
+
+**Test plan additions (Phase 1A.5):**
+- Tool loop: non-KitchenError throws, empty results, max iterations
+- Concurrency: rapid sends, task cancellation, race conditions
+- Edge cases: negative quantity, floating point precision, duplicate names, nil expiration
+- Error paths: network timeout, malformed JSON, database corruption
+
+**VERDICT:** REVIEWED — plan validated with voice pivot confirmed. 8 code fixes and 5 design additions required before Phase 1A is complete. Architecture is sound. Local model strategy resolves API key friction. Ready for implementation.
